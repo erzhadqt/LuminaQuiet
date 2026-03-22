@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../../../IOT - LuminaQuiet"
+		},
+		{
+			"name": "LuminaQUIET - esp32",
+			"path": ".."
+		}
+	],
+	"settings": {}
+}
