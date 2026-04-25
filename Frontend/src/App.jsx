@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
 
 import './App.css'
 import Layout from './Components/Layout';
@@ -10,8 +9,6 @@ import Signup from './Auth/Signup';
 import Dashboard from './Pages/Dashboard';
 import Log from './Pages/Log';
 import AdminSettings from './Pages/AdminSettings';
-
-import Sidebar from './Components/Sidebar'
 
 function App() {
 

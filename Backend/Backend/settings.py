@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,17 +26,23 @@ SECRET_KEY = 'django-insecure-60dwnx2_6j(lq8ca2nxk9go3(7)o2$0s+x0w#sm(ksv$d%pw81
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    '10.239.69.1',
-]
+if DEBUG:
+    # Development-friendly default so frontend/ESP32 can hit Django by local/LAN IP.
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = [
+        host.strip()
+        for host in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',')
+        if host.strip()
+    ]
 
 
 # Application definition
 
 INSTALLED_APPS = [
     'daphne',
+    'channels',
+    'rest_framework',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
