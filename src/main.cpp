@@ -328,18 +328,11 @@ void updateStateWithHysteresis(int level, unsigned long nowMs) {
 }
 
 // ----------------------------------------------------------------------
-// DATA MAPPING PROTOCOLS (SYNCED WITH REACT FRONTEND)
+// THRESHOLD TRANSLATION HELPERS
 // ----------------------------------------------------------------------
 
-// Maps Raw ADC back to DB (Scale: 30dB Floor to 120dB Ceiling to match Frontend)
-int mapToDbLevel(int smoothedLevel) {
-  if (baselineLevel >= 4095) return 30;
-  if (smoothedLevel <= baselineLevel) return 30;
-  int mappedDb = map(smoothedLevel, baselineLevel, 4095, 30, 120);
-  return constrain(mappedDb, 30, 120);
-}
-
-// Maps Frontend DB inputs (e.g. 55, 68, 80) precisely into Hardware ADC Values
+// Maps Frontend DB inputs (e.g. 55, 68, 80) precisely into Hardware ADC Values.
+// Live sensor readings stay raw ADC values.
 int dbToRaw(int db) {
   if (baselineLevel >= 4095) return 4095;
   long raw = map(db, 30, 120, baselineLevel, 4095);
@@ -435,10 +428,10 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
   }
 
   // Helpful Debugging print-outs
-  Serial.print("Applied DB Thresholds (Q/M/H): ");
-  Serial.print(inQuiet <= 130 ? inQuiet : mapToDbLevel(inQuiet)); Serial.print("dB / ");
-  Serial.print(inMedium <= 130 ? inMedium : mapToDbLevel(inMedium)); Serial.print("dB / ");
-  Serial.print(inLoud <= 130 ? inLoud : mapToDbLevel(inLoud)); Serial.println("dB");
+  Serial.print("Applied threshold inputs (Q/M/H): ");
+  Serial.print(inQuiet); Serial.print(inQuiet <= 130 ? " dB / " : " ADC / ");
+  Serial.print(inMedium); Serial.print(inMedium <= 130 ? " dB / " : " ADC / ");
+  Serial.print(inLoud); Serial.println(inLoud <= 130 ? " dB" : " ADC");
 
   Serial.print("Mapped to Internal ADC (Q/M/H): ");
   Serial.print(quietThreshold); Serial.print(" / ");
@@ -459,7 +452,7 @@ void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int
   doc["from_state"] = stateToString(fromState);
   doc["to_state"] = stateToString(toState);
   doc["state"] = stateToString(toState);
-  doc["average_level"] = mapToDbLevel(smoothedLevel);
+  doc["average_level"] = smoothedLevel;
   doc["raw_level"] = rawLevel;
   doc["quiet_duration_ms"] = quietDurationMs;
   doc["uptime_ms"] = millis();
@@ -550,8 +543,8 @@ void printRuntimeStatus(unsigned long nowMs) {
 
   Serial.print("Mode: ACTIVE #");
   Serial.print(activeSessionId);
-  Serial.print(" | dB: ");
-  Serial.println(mapToDbLevel(average));
+  Serial.print(" | Raw ADC: ");
+  Serial.println(average);
 }
 
 void setup() {

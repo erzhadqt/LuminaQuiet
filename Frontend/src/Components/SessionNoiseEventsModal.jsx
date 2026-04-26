@@ -26,7 +26,7 @@ const formatDateTime = (timestamp) => {
     });
 };
 
-const isWarningLog = (log) => /high|loud|warning/i.test(log.toState || log.status || '') || log.average_level > 60;
+const isWarningLog = (log) => /high|loud|warning/i.test(log.toState || log.status || '');
 
 const SessionNoiseEventsModal = ({
     isOpen,
@@ -59,7 +59,7 @@ const SessionNoiseEventsModal = ({
                         <div>
                             <h3 className="flex items-center gap-2 text-lg font-bold text-slate-900 md:text-xl">
                                 <Activity size={20} className="text-cyan-700" />
-                                Historical Noise Events
+                                Historical Raw ADC Events
                             </h3>
                             <div className="mt-2 space-y-1">
                                 {sessionInfo ? (
@@ -100,7 +100,7 @@ const SessionNoiseEventsModal = ({
                                 <div className="flex items-center justify-between gap-4">
                                     <div>
                                         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">Threshold Breach Events</p>
-                                        <p className="mt-1 text-sm text-rose-600">Total warning events during this session</p>
+                                        <p className="mt-1 text-sm text-rose-600">Total warning events during this session, based on raw ADC state</p>
                                     </div>
                                     <div className="text-right">
                                         <p className="text-4xl font-bold text-rose-600">{violations}</p>
@@ -114,7 +114,7 @@ const SessionNoiseEventsModal = ({
                                     <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
                                         <tr>
                                             <th className="px-4 py-4 text-center">Timestamp</th>
-                                            <th className="px-4 py-4 text-center">Intensity</th>
+                                            <th className="px-4 py-4 text-center">Raw ADC</th>
                                             <th className="px-4 py-4 text-center">Response</th>
                                         </tr>
                                     </thead>
@@ -125,7 +125,7 @@ const SessionNoiseEventsModal = ({
                                                     {formatTimestamp(log.timestamp)}
                                                 </td>
                                                 <td className="px-4 py-4 text-center font-semibold text-slate-900">
-                                                    {log.average_level} dB
+                                                    {log.rawLevel ?? log.average_level} ADC
                                                 </td>
                                                 <td className="px-4 py-4 text-center">
                                                     {isWarningLog(log) ? (

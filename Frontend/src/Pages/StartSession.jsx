@@ -18,21 +18,27 @@ import SessionCompletedModal from '../Components/SessionCompletedModal';
 import { ENDPOINTS } from '../config/runtime';
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
-const DEFAULT_THRESHOLDS = {
+const DEFAULT_THRESHOLDS_DB = {
     quiet: 55,
     medium: 68,
     high: 80,
 };
 
-const DISPLAY_DB_MIN = 30;
-const DISPLAY_DB_MAX = 120;
+const DEFAULT_THRESHOLDS_RAW = {
+    quiet: 800,
+    medium: 1500,
+    high: 2500,
+};
 
-const clampDbPercent = (value) => {
+const DISPLAY_ADC_MIN = 0;
+const DISPLAY_ADC_MAX = 4095;
+
+const clampAdcPercent = (value) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) {
         return 0;
     }
-    const percent = ((numeric - DISPLAY_DB_MIN) / (DISPLAY_DB_MAX - DISPLAY_DB_MIN)) * 100;
+    const percent = ((numeric - DISPLAY_ADC_MIN) / (DISPLAY_ADC_MAX - DISPLAY_ADC_MIN)) * 100;
     return Math.min(Math.max(percent, 0), 100);
 };
 
@@ -76,7 +82,8 @@ const StartSession = () => {
     const [sensorValues, setSensorValues] = useState([]);
     const [wifiRssi, setWifiRssi] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
-    const [activeThresholds, setActiveThresholds] = useState(DEFAULT_THRESHOLDS);
+    const [activeThresholdsDb, setActiveThresholdsDb] = useState(DEFAULT_THRESHOLDS_DB);
+    const [activeThresholdsRaw, setActiveThresholdsRaw] = useState(DEFAULT_THRESHOLDS_RAW);
     const [sessionInfo, setSessionInfo] = useState(null);
     const [lastCompletedSession, setLastCompletedSession] = useState(null);
     const [isStartSessionModalOpen, setIsStartSessionModalOpen] = useState(false);
@@ -127,7 +134,7 @@ const StartSession = () => {
         const thresholdDbNode = source.thresholds_db || {};
         const thresholdNode = source.thresholds || {};
 
-        setActiveThresholds((previous) => {
+        setActiveThresholdsDb((previous) => {
             const quiet = Number(
                 source.quiet_threshold_db
                 ?? thresholdDbNode.quiet
@@ -148,6 +155,36 @@ const StartSession = () => {
                 ?? source.loud_threshold
                 ?? thresholdNode.high
                 ?? thresholdNode.loud
+            );
+
+            return {
+                quiet: Number.isFinite(quiet) ? quiet : previous.quiet,
+                medium: Number.isFinite(medium) ? medium : previous.medium,
+                high: Number.isFinite(high) ? high : previous.high,
+            };
+        });
+
+        setActiveThresholdsRaw((previous) => {
+            const quiet = Number(
+                source.quiet_threshold
+                ?? thresholdNode.quiet
+                ?? source.quiet_threshold_db
+                ?? thresholdDbNode.quiet
+            );
+            const medium = Number(
+                source.medium_threshold
+                ?? thresholdNode.medium
+                ?? source.medium_threshold_db
+                ?? thresholdDbNode.medium
+            );
+            const high = Number(
+                source.high_threshold
+                ?? source.loud_threshold
+                ?? thresholdNode.high
+                ?? thresholdNode.loud
+                ?? source.high_threshold_db
+                ?? source.loud_threshold_db
+                ?? thresholdDbNode.high
             );
 
             return {
@@ -222,7 +259,8 @@ const StartSession = () => {
                     }
                     : null;
                 setSessionInfo(null);
-                setActiveThresholds(DEFAULT_THRESHOLDS);
+                setActiveThresholdsDb(DEFAULT_THRESHOLDS_DB);
+                setActiveThresholdsRaw(DEFAULT_THRESHOLDS_RAW);
                 resetTelemetryToIdle();
                 if (hadActiveSession && !isStoppingSession) {
                     setLastCompletedSession(completedSessionSnapshot);
@@ -471,19 +509,19 @@ const StartSession = () => {
     const isWarning = useMemo(
         () => {
             if (isSystemTurnedOff) return false;
-            
+
             // ARCHITECTURE FIX: Trust the hardware state machine.
-            // The ESP32 handles physical hysteresis. If the ESP32 says it is "High", 
-            // the UI must respect it, even if the current fluctuating dB dips slightly.
+            // The ESP32 handles physical hysteresis. If the ESP32 says it is "High",
+            // the UI must respect it, even if the current fluctuating raw ADC dips slightly.
             const isHardwareLoud = displayStatusText === 'High' || displayStatusText === 'STATE_LOUD';
-            
-            return displayCurrentNoise >= activeThresholds.high || isHardwareLoud;
+
+            return displayCurrentNoise >= activeThresholdsRaw.high || isHardwareLoud;
         },
-        [activeThresholds.high, displayCurrentNoise, isSystemTurnedOff, displayStatusText]
+        [activeThresholdsRaw.high, displayCurrentNoise, isSystemTurnedOff, displayStatusText]
     );
 
-    const gaugeHeight = clampDbPercent(displayCurrentNoise);
-    const highThresholdMarkerPosition = clampDbPercent(activeThresholds.high);
+    const gaugeHeight = clampAdcPercent(displayCurrentNoise);
+    const highThresholdMarkerPosition = clampAdcPercent(activeThresholdsRaw.high);
     const highThresholdLabelPosition = Math.min(Math.max(highThresholdMarkerPosition, 6), 94);
     const isTrendingUp = displayCurrentNoise > displayPreviousNoise;
 
@@ -511,10 +549,10 @@ const StartSession = () => {
 
     const sessionModalInitialValues = useMemo(() => ({
         durationMinutes: 15,
-        quiet: activeThresholds.quiet,
-        medium: activeThresholds.medium,
-        high: activeThresholds.high,
-    }), [activeThresholds.high, activeThresholds.medium, activeThresholds.quiet]);
+        quiet: activeThresholdsDb.quiet,
+        medium: activeThresholdsDb.medium,
+        high: activeThresholdsDb.high,
+    }), [activeThresholdsDb.high, activeThresholdsDb.medium, activeThresholdsDb.quiet]);
 
     return (
         <div className="space-y-6 text-slate-900">
@@ -623,7 +661,7 @@ const StartSession = () => {
                                     <h3 className={`text-7xl font-black leading-none md:text-8xl ${isWarning ? 'text-rose-600' : 'text-cyan-700'}`}>
                                         {displayCurrentNoise}
                                     </h3>
-                                    <span className="pb-3 text-xl font-semibold text-slate-500">dB</span>
+                                    <span className="pb-3 text-xl font-semibold text-slate-500">ADC</span>
                                 </div>
 
                                 <div className="flex items-end gap-4">
@@ -632,7 +670,7 @@ const StartSession = () => {
                                             <div
                                                 className="absolute inset-x-0 h-px bg-slate-400"
                                                 style={{ bottom: `${highThresholdMarkerPosition}%` }}
-                                                title={`High threshold: ${activeThresholds.high} dB`}
+                                                title={`High threshold: ${activeThresholdsRaw.high} ADC`}
                                             />
                                             <div
                                                 className={`absolute bottom-0 w-full transition-all duration-200 ${isWarning ? 'bg-rose-500' : 'bg-cyan-600'}`}
@@ -643,12 +681,12 @@ const StartSession = () => {
                                             className="pointer-events-none absolute left-full ml-2 -translate-y-1/2 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 shadow-sm"
                                             style={{ bottom: `${highThresholdLabelPosition}%` }}
                                         >
-                                            High {activeThresholds.high} dB
+                                            High {activeThresholdsRaw.high} ADC
                                         </div>
                                     </div>
                                     <div className="space-y-2 text-sm text-slate-600">
                                         <p className="font-semibold">Live gauge</p>
-                                        <p className="max-w-32 text-xs">Visual trend of incoming average noise level.</p>
+                                        <p className="max-w-32 text-xs">Visual trend of incoming average raw ADC level.</p>
                                     </div>
                                 </div>
                             </div>
@@ -701,11 +739,11 @@ const StartSession = () => {
                     </div>
 
                     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Active Thresholds (Estimated dB)</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Active Thresholds (Raw ADC)</p>
                         <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Quiet: {activeThresholds.quiet} dB</span>
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Medium: {activeThresholds.medium} dB</span>
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">High: {activeThresholds.high} dB</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Quiet: {activeThresholdsRaw.quiet} ADC</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Medium: {activeThresholdsRaw.medium} ADC</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">High: {activeThresholdsRaw.high} ADC</span>
                         </div>
 
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -740,7 +778,7 @@ const StartSession = () => {
                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Event Timing</p>
                             </div>
                             <p className="mt-1 text-sm font-semibold text-slate-700">Last packet: {formattedLastUpdate}</p>
-                            <p className="text-sm font-semibold text-slate-700">Previous level: {displayPreviousNoise} dB</p>
+                            <p className="text-sm font-semibold text-slate-700">Previous level: {displayPreviousNoise} ADC</p>
                         </div>
                     </div>
                 </div>

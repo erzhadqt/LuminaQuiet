@@ -1,11 +1,17 @@
 import json
 import math
+import asyncio
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
+from channels.testing import WebsocketCommunicator
+
+from Backend.asgi import application
 
 from .models import DeviceConfig, NoiseLog, Session
 
@@ -14,7 +20,7 @@ class CurrentNoiseApiTests(TestCase):
     def test_post_creates_log_and_returns_payload(self):
         payload = {
             "device_id": "esp32-a",
-            "average_level": 63,
+            "average_level": 1796,
             "raw_level": 1810,
             "status": "Medium",
             "state": "Medium",
@@ -33,24 +39,28 @@ class CurrentNoiseApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(NoiseLog.objects.count(), 1)
-        self.assertEqual(NoiseLog.objects.first().average_level, 63)
+        self.assertEqual(NoiseLog.objects.first().average_level, 1796)
+        self.assertEqual(NoiseLog.objects.first().raw_level, 1810)
         self.assertEqual(NoiseLog.objects.first().sensor_values, [1700, 1800, 1900])
 
         data = response.json()["data"]
         self.assertEqual(data["type"], "noise_data")
         self.assertEqual(data["device_id"], "esp32-a")
+        self.assertEqual(data["average_level"], 1796)
+        self.assertEqual(data["raw_level"], 1810)
         self.assertEqual(data["sensor_values"], [1700, 1800, 1900])
         self.assertEqual(data["buzzer_on_loud"], False)
 
     def test_get_returns_latest_snapshot(self):
-        NoiseLog.objects.create(average_level=40, raw_level=900, sensor_values=[900, 880, 910], status="Quiet")
-        NoiseLog.objects.create(average_level=70, raw_level=2500, sensor_values=[2300, 2400, 2500], status="Loud/Warning")
+        NoiseLog.objects.create(average_level=845, raw_level=900, sensor_values=[900, 880, 910], status="Quiet")
+        NoiseLog.objects.create(average_level=2462, raw_level=2500, sensor_values=[2300, 2400, 2500], status="Loud/Warning")
 
         response = self.client.get(reverse("current_noise"))
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["average_level"], 70)
+        self.assertEqual(data["average_level"], 2462)
+        self.assertEqual(data["raw_level"], 2500)
         self.assertEqual(data["status"], "Loud/Warning")
         self.assertEqual(data["sensor_values"], [2300, 2400, 2500])
         self.assertEqual(data["type"], "noise_data")
@@ -68,6 +78,51 @@ class CurrentNoiseApiTests(TestCase):
         self.assertEqual(len(data["items"]), 3)
         self.assertIn("sensor_values", data["items"][0])
         self.assertIn("config", data)
+
+
+@override_settings(
+    CHANNEL_LAYERS={
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
+)
+class NoiseConsumerTests(TestCase):
+    def test_websocket_echoes_raw_adc_payload(self):
+        payload = {
+            "type": "live_sample",
+            "session_id": 12,
+            "device_id": "esp32-a",
+            "from_state": "Medium",
+            "to_state": "High",
+            "state": "High",
+            "average_level": 3094,
+            "raw_level": 3100,
+            "sensor_values": [3011, 3122, 3201],
+            "quiet_duration_ms": 1200,
+            "uptime_ms": 5000,
+            "wifi_rssi": -61,
+        }
+
+        async def run_test():
+            communicator = WebsocketCommunicator(application, "/ws/noise/")
+
+            with patch("api.consumers.NoiseConsumer.send_current_session", new=AsyncMock(return_value=None)), \
+                 patch("api.consumers.NoiseConsumer.save_noise_log", new=AsyncMock(return_value=None)):
+                connected, _ = await communicator.connect()
+                self.assertTrue(connected)
+
+                await communicator.send_json_to(payload)
+                echoed_payload = await communicator.receive_json_from()
+
+                self.assertEqual(echoed_payload["type"], "live_sample")
+                self.assertEqual(echoed_payload["average_level"], 3094)
+                self.assertEqual(echoed_payload["raw_level"], 3100)
+                self.assertEqual(echoed_payload["sensor_values"], [3011, 3122, 3201])
+
+                await communicator.disconnect()
+
+        asyncio.run(run_test())
 
 
 class DeviceConfigApiTests(TestCase):
@@ -427,7 +482,7 @@ class SessionApiTests(TestCase):
             "device_id": "esp32-luminaquiet-01",
             "from_state": "Medium",
             "to_state": "High",
-            "average_level": 84,
+            "average_level": 3094,
             "raw_level": 3100,
             "sensor_values": [3011, 3122, 3201],
             "quiet_duration_ms": 1200,
@@ -448,6 +503,8 @@ class SessionApiTests(TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.json()["status"], "ignored")
         self.assertEqual(second.json()["data"]["type"], "live_sample")
+        self.assertEqual(second.json()["data"]["average_level"], 3094)
+        self.assertEqual(second.json()["data"]["raw_level"], 3100)
         self.assertEqual(second.json()["data"]["sensor_values"], [3011, 3122, 3201])
         self.assertEqual(NoiseLog.objects.count(), 1)
 
@@ -464,7 +521,7 @@ class SessionApiTests(TestCase):
             "device_id": "esp32-luminaquiet-01",
             "from_state": "High",
             "to_state": "Quiet",
-            "average_level": 41,
+            "average_level": 948,
             "raw_level": 950,
             "sensor_values": [920, 940, 965],
             "quiet_duration_ms": 4500,
@@ -478,6 +535,8 @@ class SessionApiTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         created = NoiseLog.objects.get(session=session)
+        self.assertEqual(created.average_level, 948)
+        self.assertEqual(created.raw_level, 950)
         self.assertEqual(created.quiet_duration_ms, 4500)
         self.assertEqual(created.sensor_values, [920, 940, 965])
         self.assertEqual(created.previous_status, "High")

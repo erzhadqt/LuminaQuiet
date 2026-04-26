@@ -25,12 +25,15 @@ const formatDateTime = (timestamp) => {
 
 const normalizeLog = (item, index = 0) => {
     const parsedLevel = Number(item.average_level ?? item.level ?? 0);
+    const parsedRawLevel = Number(item.raw_level ?? item.rawLevel ?? item.average_level ?? item.level ?? 0);
     const level = Number.isFinite(parsedLevel) ? parsedLevel : 0;
+    const rawLevel = Number.isFinite(parsedRawLevel) ? parsedRawLevel : 0;
 
     return {
         id: item.id || `${item.timestamp || 'ts'}-${item.session_id || 'session'}-${index}`,
         sessionId: parseSessionId(item.session_id),
         level,
+        rawLevel,
         fromState: item.from_state || item.previous_status || '--',
         toState: item.to_state || item.status || item.state || 'Unknown',
         status: item.status || item.to_state || item.state || 'Unknown',
@@ -168,20 +171,18 @@ const Log = () => {
                                     handleSelectSession(session.id);
                                     setIsNoiseEventsModalOpen(true);
                                 }}
-                                className={`group relative flex flex-col items-start rounded-2xl border p-5 text-left transition-all duration-300 ease-in-out hover:-translate-y-1 hover:shadow-lg ${
-                                    isSelected
+                                className={`group relative flex flex-col items-start rounded-2xl border p-5 text-left transition-all duration-300 ease-in-out hover:-translate-y-1 hover:shadow-lg ${isSelected
                                         ? 'border-cyan-500 bg-cyan-50/40 ring-1 ring-cyan-500'
                                         : 'border-slate-200 bg-white hover:border-cyan-300 hover:bg-slate-50'
-                                }`}
+                                    }`}
                             >
                                 <div className="flex w-full items-start justify-between">
                                     <p className="text-base font-extrabold text-slate-900">Session #{session.id}</p>
                                     <span
-                                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                                            session.is_active
+                                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${session.is_active
                                                 ? 'bg-emerald-100 text-emerald-700'
                                                 : 'bg-slate-100 text-slate-500'
-                                        }`}
+                                            }`}
                                     >
                                         {session.is_active ? 'Active' : 'Stopped'}
                                     </span>
