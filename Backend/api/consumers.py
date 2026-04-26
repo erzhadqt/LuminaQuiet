@@ -1,3 +1,4 @@
+# Backend/api/consumers.py
 import asyncio
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -48,8 +49,17 @@ class NoiseConsumer(AsyncWebsocketConsumer):
             print(f"Error processing WS message: {e}")
 
     # --- Group Send Event Handlers ---
+    
     async def live_noise_update(self, event):
         # Send the broadcasted data down the WebSocket to frontend clients
+        await self.send(text_data=json.dumps(event["data"]))
+
+    async def send_noise_data(self, event):
+        """Handler for noise data broadcasts originating from realtime.py/views.py"""
+        await self.send(text_data=json.dumps(event["data"]))
+
+    async def send_config_update(self, event):
+        """Handler for config updates originating from realtime.py/views.py"""
         await self.send(text_data=json.dumps(event["data"]))
 
     # --- Database Helpers ---
