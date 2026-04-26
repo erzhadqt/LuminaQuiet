@@ -7,7 +7,11 @@
 const char* WIFI_SSID = "ezratkyuti";
 const char* WIFI_PASSWORD = "87654321";
 
-const char* API_HOST = "your-app-name.onrender.com"; // REPLACE WITH YOUR RENDER URL
+#ifndef API_HOST
+#define API_HOST "https://luminaquiet.onrender.com"
+#endif
+
+const char* BACKEND_HOST = API_HOST;
 const uint16_t API_PORT = 443; 
 const char* WS_NOISE_PATH = "/ws/noise/";
 const char* DEVICE_ID = "esp32-luminaquiet-01";
@@ -156,7 +160,7 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 }
 
 void setupWebSocket() {
-  wsClient.beginSSL(API_HOST, API_PORT, WS_NOISE_PATH);
+  wsClient.beginSSL(BACKEND_HOST, API_PORT, WS_NOISE_PATH);
   wsClient.onEvent(onWebSocketEvent);
   wsClient.setReconnectInterval(WS_RECONNECT_INTERVAL_MS);
   wsClient.enableHeartbeat(WS_PING_INTERVAL_MS, 3000, 2);

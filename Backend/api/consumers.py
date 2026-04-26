@@ -2,22 +2,22 @@ import asyncio
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
+from .realtime import GROUP_NAME
 from .models import NoiseLog, Session
 
 class NoiseConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         await self.accept()
         
-        # Add the device to a global broadcast group
-        # This allows the frontend to easily listen to "frontend_clients" for live data
-        await self.channel_layer.group_add("frontend_clients", self.channel_name)
+        # Join the shared noise broadcast group used by HTTP session/config events.
+        await self.channel_layer.group_add(GROUP_NAME, self.channel_name)
         
         # Automatically push the current active session state down to the ESP32
         await self.send_current_session()
 
     async def disconnect(self, close_code):
-        # Remove from group when ESP32 disconnects
-        await self.channel_layer.group_discard("frontend_clients", self.channel_name)
+        # Remove from the shared broadcast group when the socket disconnects.
+        await self.channel_layer.group_discard(GROUP_NAME, self.channel_name)
 
     async def receive(self, text_data):
         try:
@@ -32,7 +32,7 @@ class NoiseConsumer(AsyncWebsocketConsumer):
             if "average_level" in data:
                 # Broadcast this exact live data to all listening Frontends immediately!
                 await self.channel_layer.group_send(
-                    "frontend_clients",
+                    GROUP_NAME,
                     {
                         "type": "live_noise_update",
                         "data": data
