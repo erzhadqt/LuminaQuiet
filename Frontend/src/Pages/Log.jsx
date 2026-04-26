@@ -76,6 +76,7 @@ const Log = () => {
 
     const socketRef = useRef(null);
     const reconnectTimerRef = useRef(null);
+    const heartbeatTimerRef = useRef(null);
     const activeSessionIdRef = useRef(null);
 
     const requestedSessionId = useMemo(
@@ -177,6 +178,14 @@ const Log = () => {
 
             socket.onopen = () => {
                 setIsConnected(true);
+                if (heartbeatTimerRef.current) {
+                    clearInterval(heartbeatTimerRef.current);
+                }
+                heartbeatTimerRef.current = window.setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ action: 'ping' }));
+                    }
+                }, 30000);
             };
 
             socket.onmessage = (event) => {
@@ -206,6 +215,10 @@ const Log = () => {
 
             socket.onclose = () => {
                 setIsConnected(false);
+                if (heartbeatTimerRef.current) {
+                    clearInterval(heartbeatTimerRef.current);
+                    heartbeatTimerRef.current = null;
+                }
                 if (!shouldReconnect) {
                     return;
                 }
@@ -229,6 +242,10 @@ const Log = () => {
             clearInterval(refreshTimer);
             if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current);
+            }
+            if (heartbeatTimerRef.current) {
+                clearInterval(heartbeatTimerRef.current);
+                heartbeatTimerRef.current = null;
             }
             if (socketRef.current) {
                 socketRef.current.close();
@@ -263,7 +280,7 @@ const Log = () => {
     return (
         <div className="space-y-8 text-slate-900 bg-slate-50 min-h-screen p-4 md:p-8">
             {/* Header Section */}
-            <section className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm md:p-8 transition-all duration-300 hover:shadow-md">
+            <section className="relative overflow-hidden rounded-4xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:shadow-md md:p-8">
                 <div className="pointer-events-none absolute -top-20 -right-10 h-64 w-64 rounded-full bg-cyan-100/50 blur-3xl transition-opacity duration-500" />
 
                 <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -371,7 +388,7 @@ const Log = () => {
                     </span>
                 </div>
 
-                <div className="grid max-h-[500px] grid-cols-1 gap-4 overflow-y-auto pr-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <div className="grid max-h-125 grid-cols-1 gap-4 overflow-y-auto pr-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {sessions.map((session) => {
                         const sessionId = parseSessionId(session.id);
                         const isSelected = sessionId === selectedSessionId;
@@ -386,16 +403,16 @@ const Log = () => {
                                     setIsNoiseEventsModalOpen(true);
                                 }}
                                 className={`group relative flex flex-col items-start rounded-2xl border p-5 text-left transition-all duration-300 ease-in-out hover:-translate-y-1 hover:shadow-lg ${isSelected
-                                        ? 'border-cyan-500 bg-cyan-50/40 ring-1 ring-cyan-500'
-                                        : 'border-slate-200 bg-white hover:border-cyan-300 hover:bg-slate-50'
+                                    ? 'border-cyan-500 bg-cyan-50/40 ring-1 ring-cyan-500'
+                                    : 'border-slate-200 bg-white hover:border-cyan-300 hover:bg-slate-50'
                                     }`}
                             >
                                 <div className="flex w-full items-start justify-between">
                                     <p className="text-base font-extrabold text-slate-900">Session #{session.id}</p>
                                     <span
                                         className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${session.is_active
-                                                ? 'bg-emerald-100 text-emerald-700'
-                                                : 'bg-slate-100 text-slate-500'
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : 'bg-slate-100 text-slate-500'
                                             }`}
                                     >
                                         {session.is_active ? 'Active' : 'Stopped'}

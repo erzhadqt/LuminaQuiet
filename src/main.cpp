@@ -401,7 +401,7 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
 void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int smoothedLevel, unsigned long quietDurationMs) {
   if (!wsConnected) return;
 
-  JsonDocument doc;
+  StaticJsonDocument<256> doc;
   doc["session_id"] = activeSessionId;
   doc["device_id"] = DEVICE_ID;
   doc["from_state"] = stateToString(fromState);
@@ -417,6 +417,7 @@ void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int
   for (int i = 0; i < NUM_SENSORS; i++) sensorArray.add(sensorValues[i]);
 
   String payload;
+  payload.reserve(256);
   serializeJson(doc, payload);
   wsClient.sendTXT(payload); // Sent instantly over WebSockets!
 
