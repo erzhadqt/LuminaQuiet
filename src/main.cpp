@@ -20,9 +20,6 @@ const char* DEVICE_ID = "esp32-luminaquiet-01";
 const int SOUND_SENSOR_PINS[] = {34, 35, 32};
 const int NUM_SENSORS = sizeof(SOUND_SENSOR_PINS) / sizeof(SOUND_SENSOR_PINS[0]);
 
-const int BLUE_LED_PIN = 18;
-const int GREEN_LED_PIN = 19;
-const int RED_LED_PIN = 21;
 const int BUZZER_PIN = 23;
 
 // Local defaults used at boot until admin config arrives
@@ -274,19 +271,9 @@ void resetSmoothingWindow() {
   for (int i = 0; i < NUM_READINGS; i++) readings[i] = 0;
 }
 
-void setOutputs(bool blueOn, bool greenOn, bool redOn, bool buzzerOn) {
-  digitalWrite(BLUE_LED_PIN, blueOn ? HIGH : LOW);
-  digitalWrite(GREEN_LED_PIN, greenOn ? HIGH : LOW);
-  digitalWrite(RED_LED_PIN, redOn ? HIGH : LOW);
-  digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
-}
-
-void applyStateOutputs(SoundState state) {
+void applyBuzzerOutput() {
   bool buzzerOn = isBuzzerOn(millis());
-  if (state == STATE_QUIET) setOutputs(false, false, false, buzzerOn);
-  else if (state == STATE_MEDIUM_LOW) setOutputs(true, false, false, buzzerOn);
-  else if (state == STATE_MEDIUM) setOutputs(true, true, false, buzzerOn);
-  else setOutputs(false, false, true, buzzerOn);
+  digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
 }
 
 const char* stateToString(SoundState state) {
@@ -348,7 +335,7 @@ void enterIdleMode(const char* reason) {
   activeSessionId = -1;
   buzzerAlarmActive = false;
   buzzerAlarmStartedMs = 0;
-  setOutputs(false, false, false, false);
+  digitalWrite(BUZZER_PIN, LOW);
 
   if (reason != nullptr && strlen(reason) > 0) {
     Serial.print("Mode switched to IDLE: ");
@@ -461,7 +448,7 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
 void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int smoothedLevel, unsigned long quietDurationMs) {
   if (!wsConnected) return;
 
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<512> doc;
   doc["type"] = "state_change";
   doc["session_id"] = activeSessionId;
   doc["device_id"] = DEVICE_ID;
@@ -478,7 +465,7 @@ void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int
   for (int i = 0; i < NUM_SENSORS; i++) sensorArray.add(sensorValues[i]);
 
   String payload;
-  payload.reserve(256);
+  payload.reserve(512);
   serializeJson(doc, payload);
   wsClient.sendTXT(payload); 
 
@@ -507,7 +494,7 @@ void monitorNoiseWhenActive(unsigned long nowMs) {
     lastReportedState = currentState;
     hasReportedState = true;
     updateBuzzerAlarm(nowMs);
-    applyStateOutputs(currentState);
+    applyBuzzerOutput();
     return;
   }
 
@@ -516,7 +503,7 @@ void monitorNoiseWhenActive(unsigned long nowMs) {
     triggerBuzzerAlarm(nowMs);
   }
   updateBuzzerAlarm(nowMs);
-  applyStateOutputs(currentState);
+  applyBuzzerOutput();
 
   if (currentState == lastReportedState) {
     if (nowMs - lastLiveSampleMs >= LIVE_SAMPLE_INTERVAL_MS) {
@@ -566,11 +553,8 @@ void printRuntimeStatus(unsigned long nowMs) {
 void setup() {
   Serial.begin(115200);
 
-  pinMode(BLUE_LED_PIN, OUTPUT);
-  pinMode(GREEN_LED_PIN, OUTPUT);
-  pinMode(RED_LED_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
-  setOutputs(false, false, false, false);
+  digitalWrite(BUZZER_PIN, LOW);
 
   for (int i = 0; i < NUM_READINGS; i++) readings[i] = 0;
 

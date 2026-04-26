@@ -48,7 +48,7 @@ const Log = () => {
     const [logs, setLogs] = useState([]);
     const [sessions, setSessions] = useState([]);
     const [sessionInfo, setSessionInfo] = useState(null);
-    const [onlyHighEvents, setOnlyHighEvents] = useState(true);
+    const [onlyHighEvents, setOnlyHighEvents] = useState(false);
     const [isNoiseEventsModalOpen, setIsNoiseEventsModalOpen] = useState(false);
 
     const requestedSessionId = useMemo(
@@ -172,16 +172,16 @@ const Log = () => {
                                     setIsNoiseEventsModalOpen(true);
                                 }}
                                 className={`group relative flex flex-col items-start rounded-2xl border p-5 text-left transition-all duration-300 ease-in-out hover:-translate-y-1 hover:shadow-lg ${isSelected
-                                        ? 'border-cyan-500 bg-cyan-50/40 ring-1 ring-cyan-500'
-                                        : 'border-slate-200 bg-white hover:border-cyan-300 hover:bg-slate-50'
+                                    ? 'border-cyan-500 bg-cyan-50/40 ring-1 ring-cyan-500'
+                                    : 'border-slate-200 bg-white hover:border-cyan-300 hover:bg-slate-50'
                                     }`}
                             >
                                 <div className="flex w-full items-start justify-between">
                                     <p className="text-base font-extrabold text-slate-900">Session #{session.id}</p>
                                     <span
                                         className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${session.is_active
-                                                ? 'bg-emerald-100 text-emerald-700'
-                                                : 'bg-slate-100 text-slate-500'
+                                            ? 'bg-emerald-100 text-emerald-700'
+                                            : 'bg-slate-100 text-slate-500'
                                             }`}
                                     >
                                         {session.is_active ? 'Active' : 'Stopped'}

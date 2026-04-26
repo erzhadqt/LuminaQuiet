@@ -25,6 +25,22 @@ const backendWsBase = trimTrailingSlash(
   import.meta.env.VITE_BACKEND_WS_URL || wsBaseFromHttp()
 );
 
+const normalizeWsBase = (value) => {
+  if (!value) return value;
+  if (value.startsWith('ws://') || value.startsWith('wss://')) {
+    return value;
+  }
+  if (value.startsWith('http://')) {
+    return `ws://${value.slice('http://'.length)}`;
+  }
+  if (value.startsWith('https://')) {
+    return `wss://${value.slice('https://'.length)}`;
+  }
+  return value;
+};
+
+const normalizedBackendWsBase = normalizeWsBase(backendWsBase);
+
 export const ENDPOINTS = {
   currentNoise: `${backendHttpBase}/api/current-noise/`,
   currentNoiseHistory: `${backendHttpBase}/api/current-noise/?history=1&limit=100`,
@@ -34,5 +50,5 @@ export const ENDPOINTS = {
   startSession: `${backendHttpBase}/api/sessions/start/`,
   stopSession: `${backendHttpBase}/api/sessions/stop/`,
   createLog: `${backendHttpBase}/api/logs/`,
-  noiseSocket: `${backendWsBase}/ws/noise/`,
+  noiseSocket: `${normalizedBackendWsBase}/ws/noise/`,
 };

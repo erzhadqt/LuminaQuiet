@@ -31,7 +31,7 @@ class NoiseConsumer(AsyncWebsocketConsumer):
 
             # 2. Handle Live Noise Log from ESP32
             if "average_level" in data:
-                # Broadcast this exact live data to all listening Frontends immediately!
+                # FIX: Broadcast immediately so React UI gauge updates in real-time
                 await self.channel_layer.group_send(
                     GROUP_NAME,
                     {
@@ -40,11 +40,12 @@ class NoiseConsumer(AsyncWebsocketConsumer):
                     }
                 )
 
-                # Save it in the background so the live feed is never delayed.
-                asyncio.create_task(self.save_noise_log(data))
+                # FIX: Await the DB save to prevent Python Garbage Collection 
+                # from killing the un-referenced asyncio task in production
+                await self.save_noise_log(data)
                 
         except json.JSONDecodeError:
-            print("Received invalid JSON over WebSocket")
+            print("Received invalid or truncated JSON over WebSocket")
         except Exception as e:
             print(f"Error processing WS message: {e}")
 
