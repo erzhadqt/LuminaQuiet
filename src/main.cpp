@@ -376,40 +376,56 @@ void enterActiveMode() {
 bool applySessionPayload(JsonVariantConst sessionNode) {
   int sessionId = sessionNode["id"] | -1;
 
-  // Defaults fallback
-  int inQuiet = 55;
-  int inMedium = 68;
-  int inLoud = 80;
+  int nextQuiet = quietThreshold;
+  int nextMedium = mediumThreshold;
+  int nextLoud = loudThreshold;
 
-  // The frontend sends DB values directly
-  if (!sessionNode["quiet_threshold_db"].isNull()) {
-    inQuiet = sessionNode["quiet_threshold_db"].as<int>();
-  } else if (!sessionNode["quiet_threshold"].isNull()) {
-    inQuiet = sessionNode["quiet_threshold"].as<int>();
+  bool hasRawQuiet = false;
+  bool hasRawMedium = false;
+  bool hasRawLoud = false;
+  bool hasDbQuiet = false;
+  bool hasDbMedium = false;
+  bool hasDbLoud = false;
+  int dbQuiet = 55;
+  int dbMedium = 68;
+  int dbLoud = 80;
+
+  if (!sessionNode["quiet_threshold"].isNull()) {
+    nextQuiet = sessionNode["quiet_threshold"].as<int>();
+    hasRawQuiet = true;
   }
-
-  if (!sessionNode["medium_threshold_db"].isNull()) {
-    inMedium = sessionNode["medium_threshold_db"].as<int>();
-  } else if (!sessionNode["medium_threshold"].isNull()) {
-    inMedium = sessionNode["medium_threshold"].as<int>();
+  if (!sessionNode["medium_threshold"].isNull()) {
+    nextMedium = sessionNode["medium_threshold"].as<int>();
+    hasRawMedium = true;
   }
-
-  if (!sessionNode["high_threshold_db"].isNull()) {
-    inLoud = sessionNode["high_threshold_db"].as<int>();
-  } else if (!sessionNode["loud_threshold_db"].isNull()) {
-    inLoud = sessionNode["loud_threshold_db"].as<int>();
-  } else if (!sessionNode["high_threshold"].isNull()) {
-    inLoud = sessionNode["high_threshold"].as<int>();
+  if (!sessionNode["high_threshold"].isNull()) {
+    nextLoud = sessionNode["high_threshold"].as<int>();
+    hasRawLoud = true;
   } else if (!sessionNode["loud_threshold"].isNull()) {
-    inLoud = sessionNode["loud_threshold"].as<int>();
+    nextLoud = sessionNode["loud_threshold"].as<int>();
+    hasRawLoud = true;
   }
 
-  // DYNAMIC TRANSLATION: 
-  // If the received payload is <= 130, we know it's a decibel configuration from React!
-  // Convert it strictly to RAW analog targets so the ESP32 scales correctly.
-  int nextQuiet = (inQuiet <= 130) ? dbToRaw(inQuiet) : inQuiet;
-  int nextMedium = (inMedium <= 130) ? dbToRaw(inMedium) : inMedium;
-  int nextLoud = (inLoud <= 130) ? dbToRaw(inLoud) : inLoud;
+  if (!sessionNode["quiet_threshold_db"].isNull()) {
+    dbQuiet = sessionNode["quiet_threshold_db"].as<int>();
+    hasDbQuiet = true;
+  }
+  if (!sessionNode["medium_threshold_db"].isNull()) {
+    dbMedium = sessionNode["medium_threshold_db"].as<int>();
+    hasDbMedium = true;
+  }
+  if (!sessionNode["high_threshold_db"].isNull()) {
+    dbLoud = sessionNode["high_threshold_db"].as<int>();
+    hasDbLoud = true;
+  } else if (!sessionNode["loud_threshold_db"].isNull()) {
+    dbLoud = sessionNode["loud_threshold_db"].as<int>();
+    hasDbLoud = true;
+  }
+
+  // Keep backward compatibility: convert dB only if matching raw threshold is absent.
+  if (!hasRawQuiet && hasDbQuiet) nextQuiet = dbToRaw(dbQuiet);
+  if (!hasRawMedium && hasDbMedium) nextMedium = dbToRaw(dbMedium);
+  if (!hasRawLoud && hasDbLoud) nextLoud = dbToRaw(dbLoud);
 
   if (!validateThresholdOrder(nextQuiet, nextMedium, nextLoud) || sessionId < 0) {
     Serial.println("Ignored session payload: invalid order or ID.");
@@ -428,10 +444,10 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
   }
 
   // Helpful Debugging print-outs
-  Serial.print("Applied threshold inputs (Q/M/H): ");
-  Serial.print(inQuiet); Serial.print(inQuiet <= 130 ? " dB / " : " ADC / ");
-  Serial.print(inMedium); Serial.print(inMedium <= 130 ? " dB / " : " ADC / ");
-  Serial.print(inLoud); Serial.println(inLoud <= 130 ? " dB" : " ADC");
+  Serial.print("Threshold source (Q/M/H): ");
+  Serial.print(hasRawQuiet ? "ADC" : (hasDbQuiet ? "dB" : "prev")); Serial.print(" / ");
+  Serial.print(hasRawMedium ? "ADC" : (hasDbMedium ? "dB" : "prev")); Serial.print(" / ");
+  Serial.println(hasRawLoud ? "ADC" : (hasDbLoud ? "dB" : "prev"));
 
   Serial.print("Mapped to Internal ADC (Q/M/H): ");
   Serial.print(quietThreshold); Serial.print(" / ");

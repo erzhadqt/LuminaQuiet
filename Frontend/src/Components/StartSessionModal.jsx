@@ -3,9 +3,9 @@ import { Timer, X, SlidersHorizontal } from 'lucide-react';
 
 const DEFAULT_VALUES = {
     durationMinutes: 15,
-    quiet: 55,
-    medium: 68,
-    high: 80,
+    quiet: 800,
+    medium: 1500,
+    high: 2500,
 };
 
 const DURATION_RECOMMENDATIONS = [
@@ -57,8 +57,8 @@ const StartSessionModal = ({
         [form.high, form.medium, form.quiet]
     );
 
-    const withinDbRange = useMemo(
-        () => form.quiet >= 30 && form.high <= 120,
+    const withinAdcRange = useMemo(
+        () => form.quiet >= 0 && form.high <= 4095,
         [form.high, form.quiet]
     );
 
@@ -66,7 +66,7 @@ const StartSessionModal = ({
         return null;
     }
 
-    const canSubmit = !isSubmitting && form.durationMinutes > 0 && thresholdsOrdered && withinDbRange;
+    const canSubmit = !isSubmitting && form.durationMinutes > 0 && thresholdsOrdered && withinAdcRange;
 
     const handleFieldChange = (name) => (event) => {
         const numericValue = Number(event.target.value);
@@ -88,8 +88,8 @@ const StartSessionModal = ({
             setLocalError('Threshold order must be Quiet < Medium < High.');
             return;
         }
-        if (!withinDbRange) {
-            setLocalError('Thresholds must stay within 30 dB to 120 dB.');
+        if (!withinAdcRange) {
+            setLocalError('Thresholds must stay within 0 ADC to 4095 ADC.');
             return;
         }
 
@@ -189,16 +189,16 @@ const StartSessionModal = ({
                     <div className="rounded-2xl border border-slate-200 bg-white p-4">
                         <div className="mb-3 flex items-center gap-2">
                             <SlidersHorizontal size={16} className="text-cyan-700" />
-                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Threshold Configuration (Estimated dB)</p>
+                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Threshold Configuration (ADC)</p>
                         </div>
 
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                             <div>
-                                <label className="mb-1 block text-sm font-semibold text-slate-700">Quiet (dB)</label>
+                                <label className="mb-1 block text-sm font-semibold text-slate-700">Quiet (ADC)</label>
                                 <input
                                     type="number"
-                                    min="30"
-                                    max="120"
+                                    min="0"
+                                    max="4095"
                                     value={form.quiet}
                                     onChange={handleFieldChange('quiet')}
                                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200"
@@ -207,11 +207,11 @@ const StartSessionModal = ({
                             </div>
 
                             <div>
-                                <label className="mb-1 block text-sm font-semibold text-slate-700">Medium (dB)</label>
+                                <label className="mb-1 block text-sm font-semibold text-slate-700">Medium (ADC)</label>
                                 <input
                                     type="number"
-                                    min="30"
-                                    max="120"
+                                    min="0"
+                                    max="4095"
                                     value={form.medium}
                                     onChange={handleFieldChange('medium')}
                                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200"
@@ -220,11 +220,11 @@ const StartSessionModal = ({
                             </div>
 
                             <div>
-                                <label className="mb-1 block text-sm font-semibold text-slate-700">High (dB)</label>
+                                <label className="mb-1 block text-sm font-semibold text-slate-700">High (ADC)</label>
                                 <input
                                     type="number"
-                                    min="30"
-                                    max="120"
+                                    min="0"
+                                    max="4095"
                                     value={form.high}
                                     onChange={handleFieldChange('high')}
                                     className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200"
@@ -240,9 +240,9 @@ const StartSessionModal = ({
                         </p>
                     )}
 
-                    {!withinDbRange && (
+                    {!withinAdcRange && (
                         <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">
-                            Thresholds must stay between 30 dB and 120 dB.
+                            Thresholds must stay between 0 ADC and 4095 ADC.
                         </p>
                     )}
 

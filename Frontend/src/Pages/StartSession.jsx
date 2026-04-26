@@ -291,7 +291,7 @@ const StartSession = () => {
         try {
             const payload = {
                 duration_seconds: Math.round(formValues.durationMinutes * 60),
-                thresholds_db: {
+                thresholds: {
                     quiet: Number(formValues.quiet),
                     medium: Number(formValues.medium),
                     high: Number(formValues.high),
@@ -549,10 +549,10 @@ const StartSession = () => {
 
     const sessionModalInitialValues = useMemo(() => ({
         durationMinutes: 15,
-        quiet: activeThresholdsDb.quiet,
-        medium: activeThresholdsDb.medium,
-        high: activeThresholdsDb.high,
-    }), [activeThresholdsDb.high, activeThresholdsDb.medium, activeThresholdsDb.quiet]);
+        quiet: activeThresholdsRaw.quiet,
+        medium: activeThresholdsRaw.medium,
+        high: activeThresholdsRaw.high,
+    }), [activeThresholdsRaw.high, activeThresholdsRaw.medium, activeThresholdsRaw.quiet]);
 
     return (
         <div className="space-y-6 text-slate-900">
