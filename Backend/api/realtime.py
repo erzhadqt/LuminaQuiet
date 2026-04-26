@@ -191,10 +191,13 @@ def create_noise_event(raw_payload):
     wifi_rssi = coerce_int(payload.get("wifi_rssi"), 0)
     sensor_values = _parse_sensor_values(payload.get("sensor_values", []))
 
+    db_level = float(payload.get("db_level", 0.0))
+
     log = NoiseLog.objects.create(
         device_id=device_id,
         average_level=average_level,
         raw_level=raw_level,
+        db_level=db_level,
         sensor_values=sensor_values,
         previous_status=str(payload.get("previous_status") or payload.get("from_state") or "")[:50],
         status=status,
@@ -209,6 +212,7 @@ def create_noise_event(raw_payload):
         "device_id": device_id,
         "average_level": average_level,
         "raw_level": raw_level,
+        "db_level": db_level,
         "status": status,
         "state": state,
         "baseline_level": baseline_level,

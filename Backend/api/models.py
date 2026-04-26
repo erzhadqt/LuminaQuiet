@@ -124,6 +124,10 @@ class NoiseLog(models.Model):
     timestamp = models.DateTimeField(auto_now_add=True)
     average_level = models.IntegerField()
     raw_level = models.IntegerField(default=0)
+    
+    # ADD THIS LINE
+    db_level = models.FloatField(default=0.0, null=True, blank=True) 
+    
     sensor_values = models.JSONField(default=list, blank=True)
     previous_status = models.CharField(max_length=50, blank=True, default="")
     status = models.CharField(max_length=50, default="Quiet")

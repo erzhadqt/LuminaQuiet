@@ -26,14 +26,20 @@ const formatDateTime = (timestamp) => {
 const normalizeLog = (item, index = 0) => {
     const parsedLevel = Number(item.average_level ?? item.level ?? 0);
     const parsedRawLevel = Number(item.raw_level ?? item.rawLevel ?? item.average_level ?? item.level ?? 0);
+    
+    // Extracted the new db_level sent by the backend
+    const parsedDbLevel = Number(item.db_level ?? 0); 
+
     const level = Number.isFinite(parsedLevel) ? parsedLevel : 0;
     const rawLevel = Number.isFinite(parsedRawLevel) ? parsedRawLevel : 0;
+    const dbLevel = Number.isFinite(parsedDbLevel) ? parsedDbLevel : 0; 
 
     return {
         id: item.id || `${item.timestamp || 'ts'}-${item.session_id || 'session'}-${index}`,
         sessionId: parseSessionId(item.session_id),
         level,
         rawLevel,
+        dbLevel, // Propagated down to the modal
         fromState: item.from_state || item.previous_status || '--',
         toState: item.to_state || item.status || item.state || 'Unknown',
         status: item.status || item.to_state || item.state || 'Unknown',

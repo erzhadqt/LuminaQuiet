@@ -22,6 +22,10 @@ const int NUM_SENSORS = sizeof(SOUND_SENSOR_PINS) / sizeof(SOUND_SENSOR_PINS[0])
 
 const int BUZZER_PIN = 23;
 
+// Global Calibration Constants for dB Computation
+const float DB_A = 12.60; // Multiplier (Logarithmic slope)
+const float DB_B = 45.0; // Offset (Baseline noise floor in dB)
+
 // Local defaults used at boot until admin config arrives
 const int QUIET_THRESHOLD_MIN = 800;
 const int MEDIUM_THRESHOLD_MIN = 1500;
@@ -444,8 +448,25 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
   return true;
 }
 
+// Computes dB without blocking or heavy operations
+float computeDbFromRaw(int rawADC) {
+  // 1. Baseline removal & amplitude extraction
+  // Using absolute difference to capture the waveform envelope
+  float amplitude = abs(rawADC - baselineLevel);
+  
+  // 2. Prevent log10(0) by enforcing a minimum noise floor
+  if (amplitude < 1.0) {
+    return DB_B; 
+  }
+  
+  // 3. Logarithmic conversion: dB = A * log10(amplitude) + B
+  float db = DB_A * log10(amplitude) + DB_B;
+  
+  return db;
+}
+
 // --- DATA PUSH VIA WEBSOCKET ---
-void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int smoothedLevel, unsigned long quietDurationMs) {
+void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int smoothedLevel, float dbLevel, unsigned long quietDurationMs) {
   if (!wsConnected) return;
 
   StaticJsonDocument<512> doc;
@@ -457,6 +478,7 @@ void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int
   doc["state"] = stateToString(toState);
   doc["average_level"] = smoothedLevel;
   doc["raw_level"] = rawLevel;
+  doc["db_level"] = dbLevel;
   doc["quiet_duration_ms"] = quietDurationMs;
   doc["uptime_ms"] = millis();
   doc["wifi_rssi"] = WiFi.RSSI();
@@ -484,6 +506,9 @@ void monitorNoiseWhenActive(unsigned long nowMs) {
   readIndex = (readIndex + 1) % NUM_READINGS;
   average = total / NUM_READINGS;
 
+  // Calculate dB level based on the smoothed amplitude
+  float currentDb = computeDbFromRaw(average);
+
   if (!hasReportedState) {
     currentState = computeTargetState(average);
     if (currentState == STATE_LOUD) {
@@ -507,7 +532,7 @@ void monitorNoiseWhenActive(unsigned long nowMs) {
 
   if (currentState == lastReportedState) {
     if (nowMs - lastLiveSampleMs >= LIVE_SAMPLE_INTERVAL_MS) {
-      postStateChange(currentState, currentState, rawLevel, average, 0);
+      postStateChange(currentState, currentState, rawLevel, average, currentDb, 0);
       lastLiveSampleMs = nowMs;
     }
     return;
@@ -519,7 +544,7 @@ void monitorNoiseWhenActive(unsigned long nowMs) {
   }
   if (currentState == STATE_QUIET) quietEnteredMs = nowMs;
 
-  postStateChange(lastReportedState, currentState, rawLevel, average, quietDurationMs);
+  postStateChange(lastReportedState, currentState, rawLevel, average, currentDb, quietDurationMs);
   lastReportedState = currentState;
   lastLiveSampleMs = nowMs;
 }

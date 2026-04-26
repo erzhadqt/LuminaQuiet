@@ -96,6 +96,7 @@ class NoiseConsumer(AsyncWebsocketConsumer):
                 status=to_state,
                 average_level=data.get("average_level", 0),
                 raw_level=data.get("raw_level", 0),
+                db_level=float(data.get("db_level", 0.0)), # ADD THIS LINE
                 quiet_duration_ms=data.get("quiet_duration_ms", 0),
                 sensor_values=data.get("sensor_values", [])
             )

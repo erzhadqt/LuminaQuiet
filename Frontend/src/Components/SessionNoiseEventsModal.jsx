@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Activity, AlertTriangle, ShieldCheck, Clock } from 'lucide-react';
+import { X, Activity, AlertTriangle, Clock } from 'lucide-react';
 
 const formatTimestamp = (timestamp) => {
     if (!timestamp) {
@@ -60,9 +60,10 @@ const SessionNoiseEventsModal = ({
                 <div className="border-b border-slate-100 bg-linear-to-r from-cyan-50 to-slate-50 px-6 py-5 md:px-7 shrink-0">
                     <div className="flex items-start justify-between gap-4">
                         <div>
+                            {/* Updated Header text to be inclusive of dB */}
                             <h3 className="flex items-center gap-2 text-lg font-bold text-slate-900 md:text-xl">
                                 <Activity size={20} className="text-cyan-700" />
-                                Historical Raw ADC Events
+                                Historical Noise Events
                             </h3>
                             <div className="mt-2 space-y-1">
                                 {sessionInfo ? (
@@ -104,7 +105,7 @@ const SessionNoiseEventsModal = ({
                                 <div className="flex items-center justify-between gap-4">
                                     <div>
                                         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">Threshold Breach Events</p>
-                                        <p className="mt-1 text-sm text-rose-600">Total warning events during this session, based on raw ADC state</p>
+                                        <p className="mt-1 text-sm text-rose-600">Total warning events during this session</p>
                                     </div>
                                     <div className="text-right">
                                         <p className="text-4xl font-bold text-rose-600">{violations}</p>
@@ -119,6 +120,7 @@ const SessionNoiseEventsModal = ({
                                         <tr>
                                             <th className="px-4 py-4 text-center">Timestamp</th>
                                             <th className="px-4 py-4 text-center">Raw ADC</th>
+                                            <th className="px-4 py-4 text-center">Est. dB Level</th> {/* Added dB header */}
                                             <th className="px-4 py-4 text-center">Response</th>
                                         </tr>
                                     </thead>
@@ -131,6 +133,10 @@ const SessionNoiseEventsModal = ({
                                                 </td>
                                                 <td className="px-4 py-4 text-center font-semibold text-slate-900">
                                                     {log.rawLevel ?? log.average_level} ADC
+                                                </td>
+                                                {/* Render the new dB Level Column */}
+                                                <td className="px-4 py-4 text-center font-bold text-cyan-700">
+                                                    {log.dbLevel > 0 ? `${log.dbLevel.toFixed(1)} dB` : '-- dB'}
                                                 </td>
                                                 <td className="px-4 py-4 text-center">
                                                     <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-600">
