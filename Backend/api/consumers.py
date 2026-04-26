@@ -1,3 +1,4 @@
+import asyncio
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -29,9 +30,6 @@ class NoiseConsumer(AsyncWebsocketConsumer):
 
             # 2. Handle Live Noise Log from ESP32
             if "average_level" in data:
-                # Save it to the database asynchronously
-                await self.save_noise_log(data)
-                
                 # Broadcast this exact live data to all listening Frontends immediately!
                 await self.channel_layer.group_send(
                     "frontend_clients",
@@ -40,6 +38,9 @@ class NoiseConsumer(AsyncWebsocketConsumer):
                         "data": data
                     }
                 )
+
+                # Save it in the background so the live feed is never delayed.
+                asyncio.create_task(self.save_noise_log(data))
                 
         except json.JSONDecodeError:
             print("Received invalid JSON over WebSocket")
