@@ -327,11 +327,24 @@ void updateStateWithHysteresis(int level, unsigned long nowMs) {
   }
 }
 
+// ----------------------------------------------------------------------
+// DATA MAPPING PROTOCOLS (SYNCED WITH REACT FRONTEND)
+// ----------------------------------------------------------------------
+
+// Maps Raw ADC back to DB (Scale: 30dB Floor to 120dB Ceiling to match Frontend)
 int mapToDbLevel(int smoothedLevel) {
   if (baselineLevel >= 4095) return 30;
-  int mappedDb = map(smoothedLevel, baselineLevel, 4095, 30, 100);
-  return constrain(mappedDb, 30, 100);
+  int mappedDb = map(smoothedLevel, baselineLevel, 4095, 30, 120);
+  return constrain(mappedDb, 30, 120);
 }
+
+// Maps Frontend DB inputs (e.g. 55, 68, 80) precisely into Hardware ADC Values
+int dbToRaw(int db) {
+  if (baselineLevel >= 4095) return 4095;
+  long raw = map(db, 30, 120, baselineLevel, 4095);
+  return constrain((int)raw, 0, 4095);
+}
+
 
 void enterIdleMode(const char* reason) {
   controllerMode = MODE_IDLE;
@@ -367,25 +380,28 @@ void enterActiveMode() {
 }
 
 bool applySessionPayload(JsonVariantConst sessionNode) {
-  JsonVariantConst thresholds = sessionNode["thresholds"];
   int sessionId = sessionNode["id"] | -1;
-  int nextQuiet = quietThreshold;
-  int nextMedium = mediumThreshold;
-  int nextLoud = loudThreshold;
 
-  if (!sessionNode["quiet_threshold"].isNull()) nextQuiet = sessionNode["quiet_threshold"].as<int>();
-  else if (!thresholds["quiet"].isNull()) nextQuiet = thresholds["quiet"].as<int>();
+  // Defaults fallback
+  int inQuiet = 55;
+  int inMedium = 68;
+  int inLoud = 80;
 
-  if (!sessionNode["medium_threshold"].isNull()) nextMedium = sessionNode["medium_threshold"].as<int>();
-  else if (!thresholds["medium"].isNull()) nextMedium = thresholds["medium"].as<int>();
+  // The frontend sends DB values directly
+  if (!sessionNode["quiet_threshold"].isNull()) inQuiet = sessionNode["quiet_threshold"].as<int>();
+  if (!sessionNode["medium_threshold"].isNull()) inMedium = sessionNode["medium_threshold"].as<int>();
+  if (!sessionNode["high_threshold"].isNull()) inLoud = sessionNode["high_threshold"].as<int>();
+  else if (!sessionNode["loud_threshold"].isNull()) inLoud = sessionNode["loud_threshold"].as<int>();
 
-  if (!sessionNode["high_threshold"].isNull()) nextLoud = sessionNode["high_threshold"].as<int>();
-  else if (!sessionNode["loud_threshold"].isNull()) nextLoud = sessionNode["loud_threshold"].as<int>();
-  else if (!thresholds["high"].isNull()) nextLoud = thresholds["high"].as<int>();
-  else if (!thresholds["loud"].isNull()) nextLoud = thresholds["loud"].as<int>();
+  // DYNAMIC TRANSLATION: 
+  // If the received payload is <= 130, we know it's a decibel configuration from React!
+  // Convert it strictly to RAW analog targets so the ESP32 scales correctly.
+  int nextQuiet = (inQuiet <= 130) ? dbToRaw(inQuiet) : inQuiet;
+  int nextMedium = (inMedium <= 130) ? dbToRaw(inMedium) : inMedium;
+  int nextLoud = (inLoud <= 130) ? dbToRaw(inLoud) : inLoud;
 
   if (!validateThresholdOrder(nextQuiet, nextMedium, nextLoud) || sessionId < 0) {
-    Serial.println("Ignored session payload: invalid.");
+    Serial.println("Ignored session payload: invalid order or ID.");
     return false;
   }
 
@@ -399,10 +415,22 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
     buzzerAlarmActive = false;
     buzzerAlarmStartedMs = 0;
   }
+
+  // Helpful Debugging print-outs
+  Serial.print("Applied DB Thresholds (Q/M/H): ");
+  Serial.print(inQuiet <= 130 ? inQuiet : mapToDbLevel(inQuiet)); Serial.print("dB / ");
+  Serial.print(inMedium <= 130 ? inMedium : mapToDbLevel(inMedium)); Serial.print("dB / ");
+  Serial.print(inLoud <= 130 ? inLoud : mapToDbLevel(inLoud)); Serial.println("dB");
+
+  Serial.print("Mapped to Internal ADC (Q/M/H): ");
+  Serial.print(quietThreshold); Serial.print(" / ");
+  Serial.print(mediumThreshold); Serial.print(" / ");
+  Serial.println(loudThreshold);
+
   return true;
 }
 
-// --- NEW DATA PUSH VIA WEBSOCKET ---
+// --- DATA PUSH VIA WEBSOCKET ---
 void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int smoothedLevel, unsigned long quietDurationMs) {
   if (!wsConnected) return;
 
@@ -425,7 +453,7 @@ void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int
   String payload;
   payload.reserve(256);
   serializeJson(doc, payload);
-  wsClient.sendTXT(payload); // Sent instantly over WebSockets!
+  wsClient.sendTXT(payload); 
 
   Serial.print("WS Sent: ");
   Serial.print(stateToString(fromState));
@@ -525,7 +553,7 @@ void setup() {
   Serial.println("Calibrating ambient noise... Keep environment quiet.");
   calibrateBaseline();
 
-  setupWebSocket(); // Start WS immediately. Server will push session config on connect.
+  setupWebSocket();
   enterIdleMode("Waiting for server to push active session...");
 }
 
