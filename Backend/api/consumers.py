@@ -31,7 +31,14 @@ class NoiseConsumer(AsyncWebsocketConsumer):
 
             # 2. Handle Live Noise Log from ESP32
             if "average_level" in data:
-                # FIX: Broadcast immediately so React UI gauge updates in real-time
+                from django.utils import timezone
+                
+                # ENGINEER FIX: Inject a server timestamp so the React frontend
+                # isn't relying on client-side JS time for live WebSocket frames.
+                if "timestamp" not in data:
+                    data["timestamp"] = timezone.now().isoformat()
+
+                # Broadcast immediately so React UI gauge updates in real-time
                 await self.channel_layer.group_send(
                     GROUP_NAME,
                     {

@@ -471,7 +471,15 @@ const StartSession = () => {
         connectSocket();
 
         const sessionInterval = setInterval(fetchSession, 5000);
-        const latestInterval = setInterval(fetchLatest, 7000);
+        
+        // ENGINEER FIX: Only poll the REST API if the WebSocket is NOT connected.
+        // This prevents stale DB data from overwriting the live 1Hz WebSocket stream.
+        const latestInterval = setInterval(() => {
+            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+                return; // Let the live WebSocket handle the data
+            }
+            fetchLatest(); // Fallback to DB polling if offline
+        }, 7000);
 
         return () => {
             shouldReconnect = false;

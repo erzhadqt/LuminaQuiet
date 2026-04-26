@@ -26,6 +26,7 @@ const formatDateTime = (timestamp) => {
     });
 };
 
+// Trusting the hardware state strings sent by the ESP32
 const isWarningLog = (log) => /high|loud|warning/i.test(log.toState || log.status || '');
 
 const SessionNoiseEventsModal = ({
@@ -39,7 +40,9 @@ const SessionNoiseEventsModal = ({
         return null;
     }
 
-    const violations = logs.filter((log) => isWarningLog(log)).length;
+    // Filter the logs to ONLY contain the high threshold breaches
+    const warningLogs = logs.filter(isWarningLog);
+    const violations = warningLogs.length;
 
     return (
         <div
@@ -90,9 +93,10 @@ const SessionNoiseEventsModal = ({
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6">
-                    {logs.length === 0 ? (
+                    {/* Check against warningLogs instead of all logs */}
+                    {warningLogs.length === 0 ? (
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-6 py-12 text-center">
-                            <p className="text-sm text-slate-500">No noise events recorded for this session yet.</p>
+                            <p className="text-sm text-slate-500">No threshold breach events recorded for this session yet.</p>
                         </div>
                     ) : (
                         <>
@@ -119,7 +123,8 @@ const SessionNoiseEventsModal = ({
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 bg-white">
-                                        {logs.map((log) => (
+                                        {/* Map ONLY over the warningLogs array */}
+                                        {warningLogs.map((log) => (
                                             <tr key={log.id} className="transition hover:bg-cyan-50/40">
                                                 <td className="whitespace-nowrap px-4 py-4 text-center font-medium text-slate-600">
                                                     {formatTimestamp(log.timestamp)}
@@ -128,17 +133,10 @@ const SessionNoiseEventsModal = ({
                                                     {log.rawLevel ?? log.average_level} ADC
                                                 </td>
                                                 <td className="px-4 py-4 text-center">
-                                                    {isWarningLog(log) ? (
-                                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-600">
-                                                            <AlertTriangle size={14} />
-                                                            Threshold Breach
-                                                        </span>
-                                                    ) : (
-                                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500">
-                                                            <ShieldCheck size={14} />
-                                                            Normal State
-                                                        </span>
-                                                    )}
+                                                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-600">
+                                                        <AlertTriangle size={14} />
+                                                        Threshold Breach
+                                                    </span>
                                                 </td>
                                             </tr>
                                         ))}
