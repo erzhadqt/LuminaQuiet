@@ -73,11 +73,11 @@ class NoiseConsumer(AsyncWebsocketConsumer):
             NoiseLog.objects.create(
                 session=session,
                 device_id=data.get("device_id", "unknown"),
-                from_state=data.get("from_state"),
-                to_state=data.get("to_state"),
-                state=data.get("state"),
-                average_level=data.get("average_level"),
-                raw_level=data.get("raw_level"),
+                # FIX: Map the JSON payload keys to the correct Django Model fields
+                previous_status=data.get("from_state", ""),
+                status=data.get("to_state", data.get("state", "Unknown")),
+                average_level=data.get("average_level", 0),
+                raw_level=data.get("raw_level", 0),
                 quiet_duration_ms=data.get("quiet_duration_ms", 0),
                 uptime_ms=data.get("uptime_ms", 0),
                 wifi_rssi=data.get("wifi_rssi", 0),

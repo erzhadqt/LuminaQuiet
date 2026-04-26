@@ -26,7 +26,7 @@ const formatDateTime = (timestamp) => {
     });
 };
 
-const isWarningLog = (log) => /high|loud|warning/i.test(log.toState || log.status || '') || log.level > 60;
+const isWarningLog = (log) => /high|loud|warning/i.test(log.toState || log.status || '') || log.average_level > 60;
 
 const SessionNoiseEventsModal = ({
     isOpen,
@@ -125,7 +125,7 @@ const SessionNoiseEventsModal = ({
                                                     {formatTimestamp(log.timestamp)}
                                                 </td>
                                                 <td className="px-4 py-4 text-center font-semibold text-slate-900">
-                                                    {log.level} dB
+                                                    {log.average_level} dB
                                                 </td>
                                                 <td className="px-4 py-4 text-center">
                                                     {isWarningLog(log) ? (
