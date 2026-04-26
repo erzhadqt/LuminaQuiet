@@ -18,6 +18,8 @@ import SessionCompletedModal from '../Components/SessionCompletedModal';
 import { ENDPOINTS } from '../config/runtime';
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
+
+// Utilizing dB defaults
 const DEFAULT_THRESHOLDS_DB = {
     quiet: 55,
     medium: 68,
@@ -30,15 +32,16 @@ const DEFAULT_THRESHOLDS_RAW = {
     high: 2500,
 };
 
-const DISPLAY_ADC_MIN = 0;
-const DISPLAY_ADC_MAX = 4095;
+// Switched Gauge calculation boundaries to dB
+const DISPLAY_DB_MIN = 30;
+const DISPLAY_DB_MAX = 120;
 
-const clampAdcPercent = (value) => {
+const clampDbPercent = (value) => {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) {
         return 0;
     }
-    const percent = ((numeric - DISPLAY_ADC_MIN) / (DISPLAY_ADC_MAX - DISPLAY_ADC_MIN)) * 100;
+    const percent = ((numeric - DISPLAY_DB_MIN) / (DISPLAY_DB_MAX - DISPLAY_DB_MIN)) * 100;
     return Math.min(Math.max(percent, 0), 100);
 };
 
@@ -78,18 +81,22 @@ const StartSession = () => {
 
     const [statusText, setStatusText] = useState('No Data');
     const [rawNoise, setRawNoise] = useState(0);
+    const [dbLevel, setDbLevel] = useState(0); 
     const [deviceId, setDeviceId] = useState('N/A');
     const [sensorValues, setSensorValues] = useState([]);
     const [wifiRssi, setWifiRssi] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
+    
     const [activeThresholdsDb, setActiveThresholdsDb] = useState(DEFAULT_THRESHOLDS_DB);
     const [activeThresholdsRaw, setActiveThresholdsRaw] = useState(DEFAULT_THRESHOLDS_RAW);
     const [sessionInfo, setSessionInfo] = useState(null);
     const [lastCompletedSession, setLastCompletedSession] = useState(null);
+    
     const [isStartSessionModalOpen, setIsStartSessionModalOpen] = useState(false);
     const [isSessionCompletedModalOpen, setIsSessionCompletedModalOpen] = useState(false);
     const [isStartingSession, setIsStartingSession] = useState(false);
     const [isStoppingSession, setIsStoppingSession] = useState(false);
+    
     const [sessionActionError, setSessionActionError] = useState('');
     const [sessionActionNotice, setSessionActionNotice] = useState('');
     const [nowMs, setNowMs] = useState(Date.now());
@@ -100,25 +107,21 @@ const StartSession = () => {
     const reconnectAttemptRef = useRef(0);
     const sessionActiveRef = useRef(false);
 
-    // --- ADDED: Auto-clear notifications after 3 seconds ---
     useEffect(() => {
         if (sessionActionNotice) {
             const timer = setTimeout(() => {
                 setSessionActionNotice('');
             }, 3000);
-
-            // Cleanup function clears the timeout if the component unmounts 
-            // or if a new notice is set before the 3 seconds are up
             return () => clearTimeout(timer);
         }
     }, [sessionActionNotice]);
-    // -------------------------------------------------------
 
     const resetTelemetryToIdle = useCallback(() => {
         noiseRef.current = 0;
         setCurrentNoise(0);
         setPreviousNoise(0);
         setRawNoise(0);
+        setDbLevel(0);
         setDeviceId('N/A');
         setSensorValues([]);
         setWifiRssi(null);
@@ -136,25 +139,13 @@ const StartSession = () => {
 
         setActiveThresholdsDb((previous) => {
             const quiet = Number(
-                source.quiet_threshold_db
-                ?? thresholdDbNode.quiet
-                ?? source.quiet_threshold
-                ?? thresholdNode.quiet
+                source.quiet_threshold_db ?? thresholdDbNode.quiet ?? source.quiet_threshold ?? thresholdNode.quiet
             );
             const medium = Number(
-                source.medium_threshold_db
-                ?? thresholdDbNode.medium
-                ?? source.medium_threshold
-                ?? thresholdNode.medium
+                source.medium_threshold_db ?? thresholdDbNode.medium ?? source.medium_threshold ?? thresholdNode.medium
             );
             const high = Number(
-                source.high_threshold_db
-                ?? thresholdDbNode.high
-                ?? source.loud_threshold_db
-                ?? source.high_threshold
-                ?? source.loud_threshold
-                ?? thresholdNode.high
-                ?? thresholdNode.loud
+                source.high_threshold_db ?? thresholdDbNode.high ?? source.loud_threshold_db ?? source.high_threshold ?? source.loud_threshold ?? thresholdNode.high ?? thresholdNode.loud
             );
 
             return {
@@ -166,25 +157,13 @@ const StartSession = () => {
 
         setActiveThresholdsRaw((previous) => {
             const quiet = Number(
-                source.quiet_threshold
-                ?? thresholdNode.quiet
-                ?? source.quiet_threshold_db
-                ?? thresholdDbNode.quiet
+                source.quiet_threshold ?? thresholdNode.quiet ?? source.quiet_threshold_db ?? thresholdDbNode.quiet
             );
             const medium = Number(
-                source.medium_threshold
-                ?? thresholdNode.medium
-                ?? source.medium_threshold_db
-                ?? thresholdDbNode.medium
+                source.medium_threshold ?? thresholdNode.medium ?? source.medium_threshold_db ?? thresholdDbNode.medium
             );
             const high = Number(
-                source.high_threshold
-                ?? source.loud_threshold
-                ?? thresholdNode.high
-                ?? thresholdNode.loud
-                ?? source.high_threshold_db
-                ?? source.loud_threshold_db
-                ?? thresholdDbNode.high
+                source.high_threshold ?? source.loud_threshold ?? thresholdNode.high ?? thresholdNode.loud ?? source.high_threshold_db ?? source.loud_threshold_db ?? thresholdDbNode.high
             );
 
             return {
@@ -209,6 +188,9 @@ const StartSession = () => {
 
         const parsedRaw = Number(payload.raw_level ?? 0);
         setRawNoise(Number.isFinite(parsedRaw) ? parsedRaw : 0);
+
+        const parsedDb = Number(payload.db_level ?? 0);
+        setDbLevel(Number.isFinite(parsedDb) ? parsedDb : 0);
 
         setStatusText(payload.to_state || payload.status || payload.state || 'Unknown');
         setDeviceId(payload.device_id || 'esp32-node');
@@ -289,9 +271,10 @@ const StartSession = () => {
         setIsStartingSession(true);
 
         try {
+            // Using thresholds_db node to inform backend we are submitting dB values
             const payload = {
                 duration_seconds: Math.round(formValues.durationMinutes * 60),
-                thresholds: {
+                thresholds_db: {
                     quiet: Number(formValues.quiet),
                     medium: Number(formValues.medium),
                     high: Number(formValues.high),
@@ -375,9 +358,7 @@ const StartSession = () => {
         let shouldReconnect = true;
 
         const connectSocket = () => {
-            if (!shouldReconnect) {
-                return;
-            }
+            if (!shouldReconnect) return;
 
             const socket = new WebSocket(ENDPOINTS.noiseSocket);
             socketRef.current = socket;
@@ -400,13 +381,10 @@ const StartSession = () => {
             socket.onmessage = (event) => {
                 try {
                     const payload = JSON.parse(event.data);
-                    if (payload.type === 'connection' || payload.type === 'pong') {
-                        return;
-                    }
+                    if (payload.type === 'connection' || payload.type === 'pong') return;
+                    
                     if (payload.type === 'config_update') {
-                        if (!sessionActiveRef.current) {
-                            applyThresholds(payload?.config || payload);
-                        }
+                        if (!sessionActiveRef.current) applyThresholds(payload?.config || payload);
                         return;
                     }
 
@@ -432,9 +410,7 @@ const StartSession = () => {
                     }
 
                     if (payload.type === 'state_change' || payload.type === 'noise_data' || payload.average_level !== undefined) {
-                        if (!sessionActiveRef.current) {
-                            return;
-                        }
+                        if (!sessionActiveRef.current) return;
                         applyIncomingData(payload);
                     }
                 } catch (error) {
@@ -442,19 +418,12 @@ const StartSession = () => {
                 }
             };
 
-            socket.onerror = () => {
-                socket.close();
-            };
+            socket.onerror = () => socket.close();
 
             socket.onclose = () => {
                 setIsConnected(false);
-                if (heartbeatTimer) {
-                    clearInterval(heartbeatTimer);
-                }
-
-                if (!shouldReconnect) {
-                    return;
-                }
+                if (heartbeatTimer) clearInterval(heartbeatTimer);
+                if (!shouldReconnect) return;
 
                 const nextAttempt = reconnectAttemptRef.current + 1;
                 reconnectAttemptRef.current = nextAttempt;
@@ -471,37 +440,23 @@ const StartSession = () => {
         connectSocket();
 
         const sessionInterval = setInterval(fetchSession, 5000);
-        
-        // ENGINEER FIX: Only poll the REST API if the WebSocket is NOT connected.
-        // This prevents stale DB data from overwriting the live 1Hz WebSocket stream.
         const latestInterval = setInterval(() => {
-            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                return; // Let the live WebSocket handle the data
-            }
-            fetchLatest(); // Fallback to DB polling if offline
+            if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) return;
+            fetchLatest();
         }, 7000);
 
         return () => {
             shouldReconnect = false;
             clearInterval(sessionInterval);
             clearInterval(latestInterval);
-            if (reconnectTimerRef.current) {
-                clearTimeout(reconnectTimerRef.current);
-            }
-            if (socketRef.current) {
-                socketRef.current.close();
-            }
+            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+            if (socketRef.current) socketRef.current.close();
         };
     }, [applyIncomingData, applyThresholds, fetchLatest, fetchSession, isStoppingSession, resetTelemetryToIdle, sessionInfo?.id]);
 
     useEffect(() => {
-        const timerId = setInterval(() => {
-            setNowMs(Date.now());
-        }, 1000);
-
-        return () => {
-            clearInterval(timerId);
-        };
+        const timerId = setInterval(() => setNowMs(Date.now()), 1000);
+        return () => clearInterval(timerId);
     }, []);
 
     const isSystemTurnedOff = !sessionInfo;
@@ -509,6 +464,7 @@ const StartSession = () => {
     const displayCurrentNoise = isSystemTurnedOff ? 0 : currentNoise;
     const displayPreviousNoise = isSystemTurnedOff ? 0 : previousNoise;
     const displayRawNoise = isSystemTurnedOff ? 0 : rawNoise;
+    const displayDbLevel = isSystemTurnedOff ? 0 : dbLevel;
     const displayDeviceId = isSystemTurnedOff ? 'N/A' : deviceId;
     const displayStatusText = isSystemTurnedOff ? 'OFF' : statusText;
     const displaySensorValues = isSystemTurnedOff ? [] : sensorValues;
@@ -517,50 +473,40 @@ const StartSession = () => {
     const isWarning = useMemo(
         () => {
             if (isSystemTurnedOff) return false;
-
-            // ARCHITECTURE FIX: Trust the hardware state machine.
-            // The ESP32 handles physical hysteresis. If the ESP32 says it is "High",
-            // the UI must respect it, even if the current fluctuating raw ADC dips slightly.
             const isHardwareLoud = displayStatusText === 'High' || displayStatusText === 'STATE_LOUD';
-
+            // Validation logic continues checking hardware raw states to ensure buzzer/ESP logic syncs flawlessly
             return displayCurrentNoise >= activeThresholdsRaw.high || isHardwareLoud;
         },
         [activeThresholdsRaw.high, displayCurrentNoise, isSystemTurnedOff, displayStatusText]
     );
 
-    const gaugeHeight = clampAdcPercent(displayCurrentNoise);
-    const highThresholdMarkerPosition = clampAdcPercent(activeThresholdsRaw.high);
+    // Using new DB-based gauge calculations
+    const gaugeHeight = clampDbPercent(displayDbLevel);
+    const highThresholdMarkerPosition = clampDbPercent(activeThresholdsDb.high);
     const highThresholdLabelPosition = Math.min(Math.max(highThresholdMarkerPosition, 6), 94);
     const isTrendingUp = displayCurrentNoise > displayPreviousNoise;
 
     const formattedLastUpdate = useMemo(() => {
-        if (isSystemTurnedOff) {
-            return 'N/A';
-        }
-        if (!lastUpdated) {
-            return 'No updates yet';
-        }
+        if (isSystemTurnedOff) return 'N/A';
+        if (!lastUpdated) return 'No updates yet';
         const parsedDate = new Date(lastUpdated);
-        if (Number.isNaN(parsedDate.getTime())) {
-            return 'Invalid timestamp';
-        }
+        if (Number.isNaN(parsedDate.getTime())) return 'Invalid timestamp';
         return parsedDate.toLocaleTimeString();
     }, [isSystemTurnedOff, lastUpdated]);
 
     const remainingSeconds = useMemo(() => {
-        if (!sessionInfo?.ends_at) {
-            return 0;
-        }
+        if (!sessionInfo?.ends_at) return 0;
         const end = new Date(sessionInfo.ends_at).getTime();
         return Math.max(0, Math.floor((end - nowMs) / 1000));
     }, [nowMs, sessionInfo]);
 
+    // Feed modal the DB levels instead of RAW ADC
     const sessionModalInitialValues = useMemo(() => ({
         durationMinutes: 15,
-        quiet: activeThresholdsRaw.quiet,
-        medium: activeThresholdsRaw.medium,
-        high: activeThresholdsRaw.high,
-    }), [activeThresholdsRaw.high, activeThresholdsRaw.medium, activeThresholdsRaw.quiet]);
+        quiet: activeThresholdsDb.quiet,
+        medium: activeThresholdsDb.medium,
+        high: activeThresholdsDb.high,
+    }), [activeThresholdsDb.high, activeThresholdsDb.medium, activeThresholdsDb.quiet]);
 
     return (
         <div className="space-y-6 text-slate-900">
@@ -577,7 +523,6 @@ const StartSession = () => {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
-                        {/* UNIFIED START/STOP BUTTON */}
                         <button
                             type="button"
                             onClick={() => {
@@ -666,10 +611,11 @@ const StartSession = () => {
 
                             <div className="mt-4 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
                                 <div className="flex items-end gap-3">
+                                    {/* Main DB Text Display */}
                                     <h3 className={`text-7xl font-black leading-none md:text-8xl ${isWarning ? 'text-rose-600' : 'text-cyan-700'}`}>
-                                        {displayCurrentNoise}
+                                        {isSystemTurnedOff ? 0 : displayDbLevel.toFixed(1)}
                                     </h3>
-                                    <span className="pb-3 text-xl font-semibold text-slate-500">ADC</span>
+                                    <span className="pb-3 text-xl font-semibold text-slate-500">dB</span>
                                 </div>
 
                                 <div className="flex items-end gap-4">
@@ -678,7 +624,7 @@ const StartSession = () => {
                                             <div
                                                 className="absolute inset-x-0 h-px bg-slate-400"
                                                 style={{ bottom: `${highThresholdMarkerPosition}%` }}
-                                                title={`High threshold: ${activeThresholdsRaw.high} ADC`}
+                                                title={`High threshold: ${activeThresholdsDb.high} dB`}
                                             />
                                             <div
                                                 className={`absolute bottom-0 w-full transition-all duration-200 ${isWarning ? 'bg-rose-500' : 'bg-cyan-600'}`}
@@ -689,12 +635,12 @@ const StartSession = () => {
                                             className="pointer-events-none absolute left-full ml-2 -translate-y-1/2 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 shadow-sm"
                                             style={{ bottom: `${highThresholdLabelPosition}%` }}
                                         >
-                                            High {activeThresholdsRaw.high} ADC
+                                            High {activeThresholdsDb.high} dB
                                         </div>
                                     </div>
                                     <div className="space-y-2 text-sm text-slate-600">
                                         <p className="font-semibold">Live gauge</p>
-                                        <p className="max-w-32 text-xs">Visual trend of incoming average raw ADC level.</p>
+                                        <p className="max-w-32 text-xs">Visual trend of incoming decibel level.</p>
                                     </div>
                                 </div>
                             </div>
@@ -747,11 +693,11 @@ const StartSession = () => {
                     </div>
 
                     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Active Thresholds (Raw ADC)</p>
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Active Thresholds (dB Level)</p>
                         <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Quiet: {activeThresholdsRaw.quiet} ADC</span>
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Medium: {activeThresholdsRaw.medium} ADC</span>
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">High: {activeThresholdsRaw.high} ADC</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Quiet: {activeThresholdsDb.quiet} dB</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Medium: {activeThresholdsDb.medium} dB</span>
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">High: {activeThresholdsDb.high} dB</span>
                         </div>
 
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -762,7 +708,7 @@ const StartSession = () => {
                         <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                             <div className="mb-2 flex items-center gap-2">
                                 <Volume2 size={15} className="text-slate-500" />
-                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sensor Values</p>
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Sensor Values (ADC)</p>
                             </div>
                             <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto pr-1">
                                 {displaySensorValues.length > 0 ? (
@@ -786,7 +732,7 @@ const StartSession = () => {
                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Event Timing</p>
                             </div>
                             <p className="mt-1 text-sm font-semibold text-slate-700">Last packet: {formattedLastUpdate}</p>
-                            <p className="text-sm font-semibold text-slate-700">Previous level: {displayPreviousNoise} ADC</p>
+                            <p className="text-sm font-semibold text-slate-700">Previous raw level: {displayPreviousNoise} ADC</p>
                         </div>
                     </div>
                 </div>

@@ -2,24 +2,16 @@ import React from 'react';
 import { X, Activity, AlertTriangle, Clock } from 'lucide-react';
 
 const formatTimestamp = (timestamp) => {
-    if (!timestamp) {
-        return 'N/A';
-    }
+    if (!timestamp) return 'N/A';
     const parsed = new Date(timestamp);
-    if (Number.isNaN(parsed.getTime())) {
-        return 'Invalid time';
-    }
+    if (Number.isNaN(parsed.getTime())) return 'Invalid time';
     return parsed.toLocaleTimeString();
 };
 
 const formatDateTime = (timestamp) => {
-    if (!timestamp) {
-        return 'N/A';
-    }
+    if (!timestamp) return 'N/A';
     const parsed = new Date(timestamp);
-    if (Number.isNaN(parsed.getTime())) {
-        return 'Invalid date/time';
-    }
+    if (Number.isNaN(parsed.getTime())) return 'Invalid date/time';
     return parsed.toLocaleString(undefined, {
         dateStyle: 'medium',
         timeStyle: 'short'
@@ -32,13 +24,11 @@ const isWarningLog = (log) => /high|loud|warning/i.test(log.toState || log.statu
 const SessionNoiseEventsModal = ({
     isOpen,
     onClose,
-    logs,
+    logs = [], // Default to empty array to prevent undefined map errors
     sessionInfo,
     onlyHighEvents,
 }) => {
-    if (!isOpen) {
-        return null;
-    }
+    if (!isOpen) return null;
 
     // Filter the logs to ONLY contain the high threshold breaches
     const warningLogs = logs.filter(isWarningLog);
@@ -51,16 +41,13 @@ const SessionNoiseEventsModal = ({
             aria-modal="true"
             aria-label="Session noise events"
             onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                    onClose();
-                }
+                if (event.target === event.currentTarget) onClose();
             }}
         >
             <div className="flex w-full max-w-6xl max-h-[90vh] overflow-hidden flex-col rounded-3xl border border-slate-200 bg-white shadow-2xl">
                 <div className="border-b border-slate-100 bg-linear-to-r from-cyan-50 to-slate-50 px-6 py-5 md:px-7 shrink-0">
                     <div className="flex items-start justify-between gap-4">
                         <div>
-                            {/* Updated Header text to be inclusive of dB */}
                             <h3 className="flex items-center gap-2 text-lg font-bold text-slate-900 md:text-xl">
                                 <Activity size={20} className="text-cyan-700" />
                                 Historical Noise Events
@@ -94,7 +81,6 @@ const SessionNoiseEventsModal = ({
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6">
-                    {/* Check against warningLogs instead of all logs */}
                     {warningLogs.length === 0 ? (
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-6 py-12 text-center">
                             <p className="text-sm text-slate-500">No threshold breach events recorded for this session yet.</p>
@@ -120,32 +106,35 @@ const SessionNoiseEventsModal = ({
                                         <tr>
                                             <th className="px-4 py-4 text-center">Timestamp</th>
                                             <th className="px-4 py-4 text-center">Raw ADC</th>
-                                            <th className="px-4 py-4 text-center">Est. dB Level</th> {/* Added dB header */}
+                                            <th className="px-4 py-4 text-center">Est. dB Level</th>
                                             <th className="px-4 py-4 text-center">Response</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 bg-white">
-                                        {/* Map ONLY over the warningLogs array */}
-                                        {warningLogs.map((log) => (
-                                            <tr key={log.id} className="transition hover:bg-cyan-50/40">
-                                                <td className="whitespace-nowrap px-4 py-4 text-center font-medium text-slate-600">
-                                                    {formatTimestamp(log.timestamp)}
-                                                </td>
-                                                <td className="px-4 py-4 text-center font-semibold text-slate-900">
-                                                    {log.rawLevel ?? log.average_level} ADC
-                                                </td>
-                                                {/* Render the new dB Level Column */}
-                                                <td className="px-4 py-4 text-center font-bold text-cyan-700">
-                                                    {log.dbLevel > 0 ? `${log.dbLevel.toFixed(1)} dB` : '-- dB'}
-                                                </td>
-                                                <td className="px-4 py-4 text-center">
-                                                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-600">
-                                                        <AlertTriangle size={14} />
-                                                        Threshold Breach
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        ))}
+                                        {warningLogs.map((log) => {
+                                            // Defensive check to ensure we only apply .toFixed to valid numbers
+                                            const isValidDb = log.dbLevel != null && !Number.isNaN(Number(log.dbLevel)) && log.dbLevel > 0;
+                                            
+                                            return (
+                                                <tr key={log.id} className="transition hover:bg-cyan-50/40">
+                                                    <td className="whitespace-nowrap px-4 py-4 text-center font-medium text-slate-600">
+                                                        {formatTimestamp(log.timestamp)}
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center font-semibold text-slate-900">
+                                                        {log.rawLevel ?? log.average_level} ADC
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center font-bold text-cyan-700">
+                                                        {isValidDb ? `${Number(log.dbLevel).toFixed(1)} dB` : '-- dB'}
+                                                    </td>
+                                                    <td className="px-4 py-4 text-center">
+                                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-600">
+                                                            <AlertTriangle size={14} />
+                                                            Threshold Breach
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>

@@ -174,7 +174,7 @@ def _build_log_payload(log):
         "to_state": log.status,
         "status": log.status,
         "average_level": log.average_level,
-        "raw_level": log.raw_level,
+        "raw_level": getattr(log, 'raw_level', 0),
         "db_level": getattr(log, 'db_level', 0.0),
         "sensor_values": list(log.sensor_values or []),
         "quiet_duration_ms": log.quiet_duration_ms,
