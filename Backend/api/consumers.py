@@ -91,6 +91,17 @@ class NoiseConsumer(AsyncWebsocketConsumer):
         """Fetches the current active session and formats it exactly how the ESP32 expects it."""
         session = Session.get_active()
         if session:
+            from .models import DeviceConfig
+            from .realtime import map_thresholds_to_db
+
+            config = DeviceConfig.get_solo()
+            thresholds_db = map_thresholds_to_db(
+                session.quiet_threshold, 
+                session.medium_threshold, 
+                session.high_threshold, 
+                config.calibration_a, 
+                config.calibration_b
+            )
             return {
                 "type": "session_started",
                 "session": {
@@ -98,6 +109,9 @@ class NoiseConsumer(AsyncWebsocketConsumer):
                     "quiet_threshold": session.quiet_threshold,
                     "medium_threshold": session.medium_threshold,
                     "high_threshold": session.high_threshold,
+                    "quiet_threshold_db": thresholds_db["quiet"],
+                    "medium_threshold_db": thresholds_db["medium"],
+                    "high_threshold_db": thresholds_db["high"],
                     "buzzer_on_loud": getattr(session, 'buzzer_on_loud', True)
                 }
             }

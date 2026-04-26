@@ -99,6 +99,7 @@ bool applySessionPayload(JsonVariantConst sessionNode);
 
 void triggerBuzzerAlarm(unsigned long nowMs) {
   if (!buzzerOnLoud) return;
+  if (buzzerAlarmActive) return;
   buzzerAlarmActive = true;
   buzzerAlarmStartedMs = nowMs;
 }
@@ -406,6 +407,7 @@ void postStateChange(SoundState fromState, SoundState toState, int rawLevel, int
   if (!wsConnected) return;
 
   StaticJsonDocument<256> doc;
+  doc["type"] = "state_change";
   doc["session_id"] = activeSessionId;
   doc["device_id"] = DEVICE_ID;
   doc["from_state"] = stateToString(fromState);
