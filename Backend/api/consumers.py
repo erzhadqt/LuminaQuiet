@@ -1,100 +1,98 @@
 import json
-from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-
-from .realtime import (
-    build_config_event,
-    create_noise_event,
-    get_device_config_payload,
-    update_device_config,
-)
-
+from channels.db import database_sync_to_async
+from .models import NoiseLog, Session
 
 class NoiseConsumer(AsyncWebsocketConsumer):
-    GROUP_NAME = "noise_updates"
-
     async def connect(self):
-        # Join shared group used by telemetry broadcasts.
-        self.group_name = self.GROUP_NAME
-        await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
-        await self.send(text_data=json.dumps({"type": "connection", "status": "connected"}))
-        config_payload = await self._load_device_config()
-        await self.send(text_data=json.dumps(build_config_event(config_payload, source="connect")))
+        
+        # Add the device to a global broadcast group
+        # This allows the frontend to easily listen to "frontend_clients" for live data
+        await self.channel_layer.group_add("frontend_clients", self.channel_name)
+        
+        # Automatically push the current active session state down to the ESP32
+        await self.send_current_session()
 
     async def disconnect(self, close_code):
-        # Leave the group when React disconnects
-        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        # Remove from group when ESP32 disconnects
+        await self.channel_layer.group_discard("frontend_clients", self.channel_name)
 
-    async def receive(self, text_data=None, bytes_data=None):
-        if not text_data:
-            return
+    async def receive(self, text_data):
         try:
-            payload = json.loads(text_data)
+            data = json.loads(text_data)
+            
+            # 1. Handle Ping
+            if data.get("action") == "ping":
+                await self.send(text_data=json.dumps({"type": "pong"}))
+                return
+
+            # 2. Handle Live Noise Log from ESP32
+            if "average_level" in data:
+                # Save it to the database asynchronously
+                await self.save_noise_log(data)
+                
+                # Broadcast this exact live data to all listening Frontends immediately!
+                await self.channel_layer.group_send(
+                    "frontend_clients",
+                    {
+                        "type": "live_noise_update",
+                        "data": data
+                    }
+                )
+                
         except json.JSONDecodeError:
-            await self.send(text_data=json.dumps({"type": "error", "message": "Invalid JSON payload"}))
-            return
+            print("Received invalid JSON over WebSocket")
+        except Exception as e:
+            print(f"Error processing WS message: {e}")
 
-        action = payload.get("action")
+    # --- Group Send Event Handlers ---
+    async def live_noise_update(self, event):
+        # Send the broadcasted data down the WebSocket to frontend clients
+        await self.send(text_data=json.dumps(event["data"]))
 
-        if action == "ping":
-            await self.send(text_data=json.dumps({"type": "pong"}))
-            return
+    # --- Database Helpers ---
+    @database_sync_to_async
+    def save_noise_log(self, data):
+        """Asynchronously saves the ESP32 payload to the PostgreSQL database."""
+        try:
+            session_id = data.get("session_id")
+            session = Session.objects.filter(id=session_id).first() if session_id and session_id != -1 else None
 
-        if action == "get_config":
-            config_payload = await self._load_device_config()
-            await self.send(text_data=json.dumps(build_config_event(config_payload, source="request")))
-            return
-
-        if action == "update_config":
-            try:
-                config_payload = await self._update_device_config(payload)
-                event = build_config_event(config_payload, source="ws")
-                await self.channel_layer.group_send(
-                    self.group_name,
-                    {
-                        "type": "send_config_update",
-                        "data": event,
-                    },
-                )
-            except ValueError as exc:
-                await self.send(text_data=json.dumps({"type": "error", "message": str(exc)}))
-            return
-
-        if action == "noise_data":
-            try:
-                noise_event = await self._create_noise_event(payload)
-                await self.channel_layer.group_send(
-                    self.group_name,
-                    {
-                        "type": "send_noise_data",
-                        "data": noise_event,
-                    },
-                )
-            except ValueError as exc:
-                await self.send(text_data=json.dumps({"type": "error", "message": str(exc)}))
-            return
-
-        await self.send(text_data=json.dumps({"type": "error", "message": "Unsupported action"}))
-
-    # Receive message from the group broadcast and send it to React
-    async def send_noise_data(self, event):
-        data = event['data']
-        # Send data to WebSocket
-        await self.send(text_data=json.dumps(data))
-
-    async def send_config_update(self, event):
-        data = event['data']
-        await self.send(text_data=json.dumps(data))
+            NoiseLog.objects.create(
+                session=session,
+                device_id=data.get("device_id", "unknown"),
+                from_state=data.get("from_state"),
+                to_state=data.get("to_state"),
+                state=data.get("state"),
+                average_level=data.get("average_level"),
+                raw_level=data.get("raw_level"),
+                quiet_duration_ms=data.get("quiet_duration_ms", 0),
+                uptime_ms=data.get("uptime_ms", 0),
+                wifi_rssi=data.get("wifi_rssi", 0),
+                sensor_values=data.get("sensor_values", [])
+            )
+        except Exception as e:
+            print(f"Database Error saving NoiseLog: {e}")
 
     @database_sync_to_async
-    def _load_device_config(self):
-        return get_device_config_payload()
+    def get_active_session_payload(self):
+        """Fetches the current active session and formats it exactly how the ESP32 expects it."""
+        session = Session.get_active()
+        if session:
+            return {
+                "type": "session_started",
+                "session": {
+                    "id": session.id,
+                    "quiet_threshold": session.quiet_threshold,
+                    "medium_threshold": session.medium_threshold,
+                    "high_threshold": session.high_threshold,
+                    "buzzer_on_loud": getattr(session, 'buzzer_on_loud', True)
+                }
+            }
+        return {"type": "session_stopped"}
 
-    @database_sync_to_async
-    def _update_device_config(self, payload):
-        return update_device_config(payload)
-
-    @database_sync_to_async
-    def _create_noise_event(self, payload):
-        return create_noise_event(payload)
+    async def send_current_session(self):
+        """Pushes the active session payload to the connected client."""
+        payload = await self.get_active_session_payload()
+        await self.send(text_data=json.dumps(payload))
