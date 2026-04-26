@@ -31,14 +31,13 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 
 if DEBUG:
     # Development-friendly default so frontend/ESP32 can hit Django by local/LAN IP.
-    ALLOWED_HOSTS = ['*']
+    ALLOWED_HOSTS = config('ALLOWED_HOSTS', cast=Csv())
 else:
     ALLOWED_HOSTS = [
         host.strip()
         for host in os.getenv('DJANGO_ALLOWED_HOSTS', '').split(',')
         if host.strip()
     ]
-
 
 # Application definition
 
