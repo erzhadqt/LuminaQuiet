@@ -71,17 +71,25 @@ class NoiseConsumer(AsyncWebsocketConsumer):
             session_id = data.get("session_id")
             session = Session.objects.filter(id=session_id).first() if session_id and session_id != -1 else None
 
+            device_id = data.get("device_id", "unknown")
+            to_state = data.get("to_state", data.get("state", "Unknown"))
+
+            # ARCHITECTURE FIX: State Deduplication
+            # Prevent the ESP32 from spamming the DB with thousands of duplicate "Quiet" logs.
+            # Only save a new database row if the state has actually transitioned.
+            previous_log = NoiseLog.objects.filter(session=session, device_id=device_id).order_by('-timestamp').first()
+            if previous_log and previous_log.status == to_state:
+                return # Skip saving to keep DB clean (React UI is already updated via live broadcast)
+
+            # FIX: Removed `uptime_ms` and `wifi_rssi` because they do not exist in models.py
             NoiseLog.objects.create(
                 session=session,
-                device_id=data.get("device_id", "unknown"),
-                # FIX: Map the JSON payload keys to the correct Django Model fields
+                device_id=device_id,
                 previous_status=data.get("from_state", ""),
-                status=data.get("to_state", data.get("state", "Unknown")),
+                status=to_state,
                 average_level=data.get("average_level", 0),
                 raw_level=data.get("raw_level", 0),
                 quiet_duration_ms=data.get("quiet_duration_ms", 0),
-                uptime_ms=data.get("uptime_ms", 0),
-                wifi_rssi=data.get("wifi_rssi", 0),
                 sensor_values=data.get("sensor_values", [])
             )
         except Exception as e:
