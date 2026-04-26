@@ -13,24 +13,16 @@ const parseSessionId = (value) => {
 };
 
 const formatTimestamp = (timestamp) => {
-    if (!timestamp) {
-        return 'N/A';
-    }
+    if (!timestamp) return 'N/A';
     const parsed = new Date(timestamp);
-    if (Number.isNaN(parsed.getTime())) {
-        return 'Invalid time';
-    }
+    if (Number.isNaN(parsed.getTime())) return 'Invalid time';
     return parsed.toLocaleTimeString();
 };
 
 const formatDateTime = (timestamp) => {
-    if (!timestamp) {
-        return 'Not reached';
-    }
+    if (!timestamp) return 'Not reached';
     const parsed = new Date(timestamp);
-    if (Number.isNaN(parsed.getTime())) {
-        return 'Invalid time';
-    }
+    if (Number.isNaN(parsed.getTime())) return 'Invalid time';
     return parsed.toLocaleString();
 };
 
@@ -67,6 +59,7 @@ const Log = () => {
     const [sessions, setSessions] = useState([]);
     const [isConnected, setIsConnected] = useState(false);
     const [sessionInfo, setSessionInfo] = useState(null);
+    const [liveCurrentLevel, setLiveCurrentLevel] = useState(0); // Added for independent live level tracking
     const [thresholdHits, setThresholdHits] = useState({
         mediumReachedAt: null,
         highReachedAt: null,
@@ -78,6 +71,7 @@ const Log = () => {
     const reconnectTimerRef = useRef(null);
     const heartbeatTimerRef = useRef(null);
     const activeSessionIdRef = useRef(null);
+    const fetchIdRef = useRef(0); // Added to prevent race conditions that wipe modal data
 
     const requestedSessionId = useMemo(
         () => parseSessionId(searchParams.get('session_id')),
@@ -97,40 +91,64 @@ const Log = () => {
         });
 
         setThresholdHits((previous) => ({
-            mediumReachedAt:
-                previous.mediumReachedAt || (isMediumThresholdState(nextLog.toState) ? nextLog.timestamp : null),
-            highReachedAt:
-                previous.highReachedAt || (isHighThresholdState(nextLog.toState) ? nextLog.timestamp : null),
+            mediumReachedAt: previous.mediumReachedAt || (isMediumThresholdState(nextLog.toState) ? nextLog.timestamp : null),
+            highReachedAt: previous.highReachedAt || (isHighThresholdState(nextLog.toState) ? nextLog.timestamp : null),
         }));
     }, [onlyHighEvents]);
+
+    // Added to fetch independent current live noise
+    const fetchCurrentNoise = useCallback(async () => {
+        try {
+            const response = await fetch(ENDPOINTS.currentNoise);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.average_level !== undefined) {
+                    setLiveCurrentLevel(Number(data.average_level));
+                }
+            }
+        } catch (error) {
+            // Silently ignore background failures
+        }
+    }, []);
 
     const fetchSessions = useCallback(async () => {
         try {
             const response = await fetch(ENDPOINTS.sessionsList);
-            if (!response.ok) {
-                throw new Error(`GET sessions failed with status ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`GET sessions failed with status ${response.status}`);
 
             const payload = await response.json();
             const items = Array.isArray(payload?.items) ? payload.items : [];
-            setSessions(items);
+
+            // Modified: Only display sessions that have finished (is_active === false)
+            setSessions(items.filter(session => !session.is_active));
         } catch (error) {
             console.error('Failed to load sessions:', error);
         }
     }, []);
 
     const fetchSessionDetails = useCallback(async (targetSessionId) => {
+        const currentFetchId = ++fetchIdRef.current; // Track this specific fetch
+
+        // Modified: Do not auto-fetch backend default if no session is clicked
+        if (!targetSessionId) {
+            setLogs([]);
+            setSessionInfo(null);
+            setThresholdHits({ mediumReachedAt: null, highReachedAt: null });
+            activeSessionIdRef.current = null;
+            return;
+        }
+
         try {
             const endpoint = new URL(ENDPOINTS.createLog);
             endpoint.searchParams.set('limit', String(MAX_LOG_ROWS));
-            if (onlyHighEvents) {
-                endpoint.searchParams.set('high_only', '1');
-            }
-            if (targetSessionId) {
-                endpoint.searchParams.set('session_id', String(targetSessionId));
-            }
+            if (onlyHighEvents) endpoint.searchParams.set('high_only', '1');
+            endpoint.searchParams.set('session_id', String(targetSessionId));
 
             const response = await fetch(endpoint.toString());
+
+            // Race Condition Fix: If another fetch was started while we were waiting, discard this data
+            if (currentFetchId !== fetchIdRef.current) return;
+
             if (response.status === 404) {
                 setLogs([]);
                 setSessionInfo(null);
@@ -138,9 +156,8 @@ const Log = () => {
                 activeSessionIdRef.current = null;
                 return;
             }
-            if (!response.ok) {
-                throw new Error(`GET logs failed with status ${response.status}`);
-            }
+
+            if (!response.ok) throw new Error(`GET logs failed with status ${response.status}`);
 
             const payload = await response.json();
             const session = payload?.session || null;
@@ -154,12 +171,13 @@ const Log = () => {
             });
             setLogs(items.map((item, index) => normalizeLog(item, index)));
 
-            const activeSessionId = parseSessionId(session?.id);
-            activeSessionIdRef.current = activeSessionId;
+            activeSessionIdRef.current = parseSessionId(session?.id);
         } catch (error) {
-            console.error('Failed to load session log details:', error);
+            if (currentFetchId === fetchIdRef.current) {
+                console.error('Failed to load session log details:', error);
+            }
         }
-    }, []);
+    }, [onlyHighEvents]);
 
     useEffect(() => {
         activeSessionIdRef.current = requestedSessionId || parseSessionId(sessionInfo?.id);
@@ -169,18 +187,15 @@ const Log = () => {
         let shouldReconnect = true;
 
         const connectSocket = (attempt = 0) => {
-            if (!shouldReconnect) {
-                return;
-            }
+            if (!shouldReconnect) return;
 
             const socket = new WebSocket(ENDPOINTS.noiseSocket);
             socketRef.current = socket;
 
             socket.onopen = () => {
                 setIsConnected(true);
-                if (heartbeatTimerRef.current) {
-                    clearInterval(heartbeatTimerRef.current);
-                }
+                if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+
                 heartbeatTimerRef.current = window.setInterval(() => {
                     if (socket.readyState === WebSocket.OPEN) {
                         socket.send(JSON.stringify({ action: 'ping' }));
@@ -191,15 +206,17 @@ const Log = () => {
             socket.onmessage = (event) => {
                 try {
                     const payload = JSON.parse(event.data);
-                    if (payload.type === 'connection' || payload.type === 'pong') {
-                        return;
+                    if (payload.type === 'connection' || payload.type === 'pong') return;
+
+                    // Always update the live current level widget regardless of active session
+                    if (payload.average_level !== undefined) {
+                        setLiveCurrentLevel(Number(payload.average_level));
                     }
 
                     const activeSessionId = activeSessionIdRef.current;
                     const payloadSessionId = parseSessionId(payload.session_id);
-                    if (!activeSessionId || payloadSessionId !== activeSessionId) {
-                        return;
-                    }
+
+                    if (!activeSessionId || payloadSessionId !== activeSessionId) return;
 
                     if (payload.type === 'state_change') {
                         appendTransitionLog(payload);
@@ -209,9 +226,7 @@ const Log = () => {
                 }
             };
 
-            socket.onerror = () => {
-                socket.close();
-            };
+            socket.onerror = () => socket.close();
 
             socket.onclose = () => {
                 setIsConnected(false);
@@ -219,20 +234,20 @@ const Log = () => {
                     clearInterval(heartbeatTimerRef.current);
                     heartbeatTimerRef.current = null;
                 }
-                if (!shouldReconnect) {
-                    return;
-                }
+                if (!shouldReconnect) return;
 
                 const delay = Math.min(10000, 1000 * 2 ** attempt);
                 reconnectTimerRef.current = setTimeout(() => connectSocket(attempt + 1), delay);
             };
         };
 
+        fetchCurrentNoise();
         fetchSessions();
         fetchSessionDetails(requestedSessionId);
         connectSocket();
 
         const refreshTimer = setInterval(() => {
+            fetchCurrentNoise();
             fetchSessions();
             fetchSessionDetails(requestedSessionId);
         }, REFRESH_INTERVAL_MS);
@@ -240,33 +255,22 @@ const Log = () => {
         return () => {
             shouldReconnect = false;
             clearInterval(refreshTimer);
-            if (reconnectTimerRef.current) {
-                clearTimeout(reconnectTimerRef.current);
-            }
+            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
             if (heartbeatTimerRef.current) {
                 clearInterval(heartbeatTimerRef.current);
                 heartbeatTimerRef.current = null;
             }
-            if (socketRef.current) {
-                socketRef.current.close();
-            }
+            if (socketRef.current) socketRef.current.close();
         };
-    }, [appendTransitionLog, fetchSessionDetails, fetchSessions, requestedSessionId]);
+    }, [appendTransitionLog, fetchCurrentNoise, fetchSessionDetails, fetchSessions, requestedSessionId]);
 
     const handleSelectSession = useCallback((sessionId) => {
         setSearchParams({ session_id: String(sessionId) });
     }, [setSearchParams]);
 
-    const currentLevel = logs[0]?.level ?? 0;
-
-    // ⚠️ Watch out: Modified to return the full log object instead of just the number
     const peakLog = useMemo(() => {
-        if (logs.length === 0) {
-            return null;
-        }
-        return logs.reduce((maxLog, currentLog) =>
-            currentLog.level > maxLog.level ? currentLog : maxLog
-            , logs[0]);
+        if (logs.length === 0) return null;
+        return logs.reduce((maxLog, currentLog) => currentLog.level > maxLog.level ? currentLog : maxLog, logs[0]);
     }, [logs]);
 
     const activeSessionLabel = sessionInfo
@@ -279,7 +283,6 @@ const Log = () => {
 
     return (
         <div className="space-y-8 text-slate-900 bg-slate-50 min-h-screen p-4 md:p-8">
-            {/* Header Section */}
             <section className="relative overflow-hidden rounded-4xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:shadow-md md:p-8">
                 <div className="pointer-events-none absolute -top-20 -right-10 h-64 w-64 rounded-full bg-cyan-100/50 blur-3xl transition-opacity duration-500" />
 
@@ -291,7 +294,7 @@ const Log = () => {
                         </div>
                         <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 md:text-4xl">Noise Transition Log</h2>
                         <p className="max-w-2xl text-sm font-medium text-slate-500 md:text-base">
-                            Inspect per-session transition events and threshold breach timings with real-time updates.
+                            Inspect finished session transition events and threshold breach timings with real-time updates.
                         </p>
                     </div>
 
@@ -309,18 +312,17 @@ const Log = () => {
                 </div>
             </section>
 
-            {/* Metrics Dashboard */}
             <section className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {/* Current Level Card */}
+                {/* Live Current Level Card */}
                 <div className="group flex flex-col justify-between rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:border-cyan-200 cursor-default">
                     <div className="flex items-center gap-3 text-cyan-700">
                         <div className="rounded-lg bg-cyan-50 p-2 group-hover:bg-cyan-100 transition-colors">
                             <GaugeCircle size={20} />
                         </div>
-                        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Current Level</p>
+                        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Live Current Level</p>
                     </div>
                     <div className="mt-6 flex items-end gap-2">
-                        <p className="text-4xl font-extrabold text-slate-900">{currentLevel}</p>
+                        <p className="text-4xl font-extrabold text-slate-900">{liveCurrentLevel}</p>
                         <p className="mb-1 text-lg font-semibold text-slate-500">dB</p>
                     </div>
                 </div>
@@ -374,14 +376,13 @@ const Log = () => {
                 </div>
             </section>
 
-            {/* Sessions List Section */}
             <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
                 <div className="mb-6 flex items-center justify-between border-b border-slate-100 pb-4">
                     <div className="flex items-center gap-3">
                         <div className="rounded-lg bg-slate-100 p-2 text-slate-600">
                             <Calendar size={20} />
                         </div>
-                        <h3 className="text-lg font-bold text-slate-900">All Admin Sessions</h3>
+                        <h3 className="text-lg font-bold text-slate-900">Finished Admin Sessions</h3>
                     </div>
                     <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
                         {sessions.length} Total
@@ -440,8 +441,8 @@ const Log = () => {
                     {sessions.length === 0 && (
                         <div className="col-span-full flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 py-12 text-slate-500">
                             <Calendar size={32} className="mb-3 text-slate-300" />
-                            <p className="text-sm font-semibold">No sessions found yet.</p>
-                            <p className="mt-1 text-xs text-slate-400">Recorded sessions will appear here.</p>
+                            <p className="text-sm font-semibold">No finished sessions found yet.</p>
+                            <p className="mt-1 text-xs text-slate-400">Recorded sessions will appear here once stopped.</p>
                         </div>
                     )}
                 </div>
