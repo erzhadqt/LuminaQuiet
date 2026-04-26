@@ -8,7 +8,7 @@ const char* WIFI_SSID = "ezratkyuti";
 const char* WIFI_PASSWORD = "87654321";
 
 #ifndef API_HOST
-#define API_HOST "https://luminaquiet.onrender.com"
+#define API_HOST "luminaquiet.onrender.com"
 #endif
 
 const char* BACKEND_HOST = API_HOST;
