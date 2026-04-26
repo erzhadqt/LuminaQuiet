@@ -334,6 +334,7 @@ void updateStateWithHysteresis(int level, unsigned long nowMs) {
 // Maps Raw ADC back to DB (Scale: 30dB Floor to 120dB Ceiling to match Frontend)
 int mapToDbLevel(int smoothedLevel) {
   if (baselineLevel >= 4095) return 30;
+  if (smoothedLevel <= baselineLevel) return 30;
   int mappedDb = map(smoothedLevel, baselineLevel, 4095, 30, 120);
   return constrain(mappedDb, 30, 120);
 }
@@ -388,10 +389,27 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
   int inLoud = 80;
 
   // The frontend sends DB values directly
-  if (!sessionNode["quiet_threshold"].isNull()) inQuiet = sessionNode["quiet_threshold"].as<int>();
-  if (!sessionNode["medium_threshold"].isNull()) inMedium = sessionNode["medium_threshold"].as<int>();
-  if (!sessionNode["high_threshold"].isNull()) inLoud = sessionNode["high_threshold"].as<int>();
-  else if (!sessionNode["loud_threshold"].isNull()) inLoud = sessionNode["loud_threshold"].as<int>();
+  if (!sessionNode["quiet_threshold_db"].isNull()) {
+    inQuiet = sessionNode["quiet_threshold_db"].as<int>();
+  } else if (!sessionNode["quiet_threshold"].isNull()) {
+    inQuiet = sessionNode["quiet_threshold"].as<int>();
+  }
+
+  if (!sessionNode["medium_threshold_db"].isNull()) {
+    inMedium = sessionNode["medium_threshold_db"].as<int>();
+  } else if (!sessionNode["medium_threshold"].isNull()) {
+    inMedium = sessionNode["medium_threshold"].as<int>();
+  }
+
+  if (!sessionNode["high_threshold_db"].isNull()) {
+    inLoud = sessionNode["high_threshold_db"].as<int>();
+  } else if (!sessionNode["loud_threshold_db"].isNull()) {
+    inLoud = sessionNode["loud_threshold_db"].as<int>();
+  } else if (!sessionNode["high_threshold"].isNull()) {
+    inLoud = sessionNode["high_threshold"].as<int>();
+  } else if (!sessionNode["loud_threshold"].isNull()) {
+    inLoud = sessionNode["loud_threshold"].as<int>();
+  }
 
   // DYNAMIC TRANSLATION: 
   // If the received payload is <= 130, we know it's a decibel configuration from React!

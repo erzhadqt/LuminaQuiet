@@ -469,8 +469,17 @@ const StartSession = () => {
     const displayWifiRssi = isSystemTurnedOff || wifiRssi === null ? 'N/A' : `${wifiRssi} dBm`;
 
     const isWarning = useMemo(
-        () => !isSystemTurnedOff && displayCurrentNoise >= activeThresholds.high,
-        [activeThresholds.high, displayCurrentNoise, isSystemTurnedOff]
+        () => {
+            if (isSystemTurnedOff) return false;
+            
+            // ARCHITECTURE FIX: Trust the hardware state machine.
+            // The ESP32 handles physical hysteresis. If the ESP32 says it is "High", 
+            // the UI must respect it, even if the current fluctuating dB dips slightly.
+            const isHardwareLoud = displayStatusText === 'High' || displayStatusText === 'STATE_LOUD';
+            
+            return displayCurrentNoise >= activeThresholds.high || isHardwareLoud;
+        },
+        [activeThresholds.high, displayCurrentNoise, isSystemTurnedOff, displayStatusText]
     );
 
     const gaugeHeight = clampDbPercent(displayCurrentNoise);
