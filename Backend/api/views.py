@@ -1,5 +1,7 @@
 import json
+import math
 from django.core.exceptions import ValidationError
+from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -10,11 +12,13 @@ from rest_framework.response import Response
 
 from .models import NoiseLog, Session
 from .realtime import (
+    db_to_adc,
     build_config_event,
     broadcast_config_event,
     broadcast_noise_event,
     create_noise_event,
     get_device_config_payload,
+    map_thresholds_to_db,
     update_device_config,
 )
 
@@ -36,6 +40,65 @@ def _parse_sensor_values(values):
     return [_as_int(value, 0) for value in values[:8]]
 
 
+def _as_float(value, default=None):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _fit_log_calibration(samples):
+    cleaned = []
+    for sample in samples or []:
+        if not isinstance(sample, dict):
+            continue
+        adc = _as_float(sample.get("adc"), None)
+        spl_db = _as_float(sample.get("spl_db"), None)
+        if adc is None or spl_db is None:
+            continue
+        if adc <= 0:
+            continue
+        cleaned.append((adc, spl_db))
+
+    if len(cleaned) < 2:
+        raise ValueError("At least 2 valid samples are required (adc > 0, numeric spl_db)")
+
+    n = float(len(cleaned))
+    sum_x = 0.0
+    sum_y = 0.0
+    sum_x2 = 0.0
+    sum_xy = 0.0
+
+    for adc, spl_db in cleaned:
+        x = math.log10(adc)
+        y = spl_db
+        sum_x += x
+        sum_y += y
+        sum_x2 += x * x
+        sum_xy += x * y
+
+    denominator = n * sum_x2 - sum_x * sum_x
+    if abs(denominator) < 1e-9:
+        raise ValueError("Samples do not span enough ADC range to fit calibration")
+
+    calibration_a = (n * sum_xy - sum_x * sum_y) / denominator
+    calibration_b = (sum_y - calibration_a * sum_x) / n
+
+    if not math.isfinite(calibration_a) or not math.isfinite(calibration_b):
+        raise ValueError("Calibration fit failed: non-finite coefficients")
+    if calibration_a <= 0:
+        raise ValueError("Calibration fit failed: slope must be positive")
+
+    residual_sum = 0.0
+    for adc, spl_db in cleaned:
+        estimated = calibration_a * math.log10(adc) + calibration_b
+        diff = estimated - spl_db
+        residual_sum += diff * diff
+
+    rmse_db = math.sqrt(residual_sum / n)
+    return calibration_a, calibration_b, rmse_db, int(n)
+
+
 def _state_bucket(state_value):
     state = str(state_value or "").strip().lower()
     if not state:
@@ -47,8 +110,23 @@ def _state_bucket(state_value):
     return ""
 
 
+def _is_high_state(state_value):
+    return _state_bucket(state_value) == "high"
+
+
 def _session_payload(session):
     remaining_seconds = max(0, int((session.ends_at - timezone.now()).total_seconds()))
+    config_payload = get_device_config_payload()
+    calibration = config_payload.get("calibration") or {}
+    calibration_a = float(calibration.get("a", 70.0))
+    calibration_b = float(calibration.get("b", -160.0))
+    thresholds_db = map_thresholds_to_db(
+        session.quiet_threshold,
+        session.medium_threshold,
+        session.high_threshold,
+        calibration_a,
+        calibration_b,
+    )
 
     return {
         "id": session.id,
@@ -60,11 +138,29 @@ def _session_payload(session):
         "quiet_threshold": session.quiet_threshold,
         "medium_threshold": session.medium_threshold,
         "high_threshold": session.high_threshold,
+        "quiet_threshold_db": thresholds_db["quiet"],
+        "medium_threshold_db": thresholds_db["medium"],
+        "high_threshold_db": thresholds_db["high"],
+        "thresholds_db": thresholds_db,
+        "calibration": {
+            "a": calibration_a,
+            "b": calibration_b,
+        },
+        "buzzer_on_loud": True,
         "thresholds": {
             "quiet": session.quiet_threshold,
             "medium": session.medium_threshold,
             "high": session.high_threshold,
         },
+    }
+
+
+def _session_started_event(session):
+    return {
+        "type": "session_started",
+        "session": _session_payload(session),
+        "timestamp": timezone.now().isoformat(),
+        "reason": "started_by_admin",
     }
 
 
@@ -224,6 +320,45 @@ def device_config(request):
         return JsonResponse({"error": str(exc)}, status=400)
 
 
+@csrf_exempt
+@require_http_methods(["POST"])
+def calibrate_device_config(request):
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON payload"}, status=400)
+
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        return JsonResponse({"error": "samples must be a list"}, status=400)
+
+    try:
+        calibration_a, calibration_b, rmse_db, sample_count = _fit_log_calibration(samples)
+        config_payload = update_device_config(
+            {
+                "calibration": {
+                    "a": calibration_a,
+                    "b": calibration_b,
+                }
+            }
+        )
+        event = build_config_event(config_payload, source="calibration")
+        broadcast_config_event(event)
+
+        return JsonResponse(
+            {
+                "status": "calibrated",
+                "sample_count": sample_count,
+                "rmse_db": round(rmse_db, 4),
+                "calibration": config_payload["calibration"],
+                "config": config_payload,
+            },
+            status=200,
+        )
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
 @api_view(["POST"])
 def start_session(request):
     Session.deactivate_expired()
@@ -238,20 +373,57 @@ def start_session(request):
 
     payload = request.data or {}
     thresholds = payload.get("thresholds", {})
+    thresholds_db = payload.get("thresholds_db", {})
+    config_payload = get_device_config_payload()
+    calibration = config_payload.get("calibration") or {}
+    calibration_a = float(calibration.get("a", 70.0))
+    calibration_b = float(calibration.get("b", -160.0))
 
     duration_seconds = _as_int(payload.get("duration_seconds"), 0)
-    quiet_threshold = _as_int(
-        payload.get("quiet_threshold", thresholds.get("quiet")),
-        800,
+
+    has_db_thresholds = any(
+        value is not None
+        for value in (
+            payload.get("quiet_threshold_db"),
+            payload.get("medium_threshold_db"),
+            payload.get("high_threshold_db"),
+            thresholds_db.get("quiet"),
+            thresholds_db.get("medium"),
+            thresholds_db.get("high"),
+        )
     )
-    medium_threshold = _as_int(
-        payload.get("medium_threshold", thresholds.get("medium")),
-        1500,
-    )
-    high_threshold = _as_int(
-        payload.get("high_threshold", thresholds.get("high")),
-        2500,
-    )
+
+    if has_db_thresholds:
+        try:
+            quiet_db = float(payload.get("quiet_threshold_db", thresholds_db.get("quiet")))
+            medium_db = float(payload.get("medium_threshold_db", thresholds_db.get("medium")))
+            high_db = float(payload.get("high_threshold_db", thresholds_db.get("high")))
+        except (TypeError, ValueError):
+            return Response(
+                {
+                    "errors": {
+                        "thresholds_db": ["thresholds_db values must be valid numbers"]
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        quiet_threshold = db_to_adc(quiet_db, calibration_a, calibration_b)
+        medium_threshold = db_to_adc(medium_db, calibration_a, calibration_b)
+        high_threshold = db_to_adc(high_db, calibration_a, calibration_b)
+    else:
+        quiet_threshold = _as_int(
+            payload.get("quiet_threshold", thresholds.get("quiet")),
+            800,
+        )
+        medium_threshold = _as_int(
+            payload.get("medium_threshold", thresholds.get("medium")),
+            1500,
+        )
+        high_threshold = _as_int(
+            payload.get("high_threshold", thresholds.get("high")),
+            2500,
+        )
 
     try:
         session = Session(
@@ -264,6 +436,8 @@ def start_session(request):
         session.save()
     except ValidationError as exc:
         return Response({"errors": exc.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+
+    broadcast_noise_event(_session_started_event(session))
 
     return Response(
         {
@@ -286,15 +460,19 @@ def stop_session(request):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    session.is_active = False
-    session.save(update_fields=["is_active"])
+    stopped_at = timezone.now()
+    Session.objects.filter(pk=session.pk).update(
+        is_active=False,
+        ends_at=stopped_at,
+    )
+    session.refresh_from_db()
 
     # Push immediate stop signal to websocket subscribers (dashboard/ESP32).
     broadcast_noise_event(
         {
             "type": "session_stopped",
             "session_id": session.id,
-            "timestamp": timezone.now().isoformat(),
+            "timestamp": stopped_at.isoformat(),
             "reason": "stopped_by_admin",
         }
     )
@@ -329,6 +507,37 @@ def current_session(request):
     )
 
 
+@api_view(["GET"])
+def list_sessions(request):
+    Session.deactivate_expired()
+
+    high_filter = (
+        Q(logs__status__icontains="high")
+        | Q(logs__status__icontains="loud")
+        | Q(logs__status__icontains="warning")
+    )
+    sessions = (
+        Session.objects.order_by("-started_at")
+        .annotate(log_count=Count("logs"), high_event_count=Count("logs", filter=high_filter))
+    )
+
+    items = []
+    for session in sessions:
+        payload = _session_payload(session)
+        payload["log_count"] = session.log_count
+        payload["high_event_count"] = session.high_event_count
+        items.append(payload)
+
+    return Response(
+        {
+            "status": "ok",
+            "items": items,
+            "count": len(items),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["GET", "POST"])
 def create_log(request):
     if request.method == "GET":
@@ -350,13 +559,36 @@ def create_log(request):
             )
 
         limit = max(1, min(_as_int(request.query_params.get("limit"), 150), 500))
-        logs = NoiseLog.objects.filter(session=session).order_by("-timestamp")[:limit]
+        high_only = _truthy(request.query_params.get("high_only"))
+
+        logs = NoiseLog.objects.filter(session=session)
+        if high_only:
+            logs = logs.filter(
+                Q(status__icontains="high")
+                | Q(status__icontains="loud")
+                | Q(status__icontains="warning")
+            )
+        logs = list(logs.order_by("-timestamp")[:limit])
+
+        medium_reached_at = None
+        high_reached_at = None
+        if high_only:
+            oldest_high = logs[-1] if logs else None
+            high_reached_at = oldest_high.timestamp.isoformat() if oldest_high else None
+        else:
+            threshold_hits = _compute_threshold_hits(session)
+            medium_reached_at = threshold_hits["medium_reached_at"]
+            high_reached_at = threshold_hits["high_reached_at"]
 
         return Response(
             {
                 "status": "ok",
                 "session": _session_payload(session),
-                "threshold_hits": _compute_threshold_hits(session),
+                "high_only": high_only,
+                "threshold_hits": {
+                    "medium_reached_at": medium_reached_at,
+                    "high_reached_at": high_reached_at,
+                },
                 "items": [_build_log_payload(log) for log in logs],
                 "count": len(logs),
             },

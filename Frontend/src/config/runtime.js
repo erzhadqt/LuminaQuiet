@@ -30,6 +30,7 @@ export const ENDPOINTS = {
   currentNoiseHistory: `${backendHttpBase}/api/current-noise/?history=1&limit=100`,
   deviceConfig: `${backendHttpBase}/api/device-config/`,
   currentSession: `${backendHttpBase}/api/sessions/current/`,
+  sessionsList: `${backendHttpBase}/api/sessions/`,
   startSession: `${backendHttpBase}/api/sessions/start/`,
   stopSession: `${backendHttpBase}/api/sessions/stop/`,
   createLog: `${backendHttpBase}/api/logs/`,

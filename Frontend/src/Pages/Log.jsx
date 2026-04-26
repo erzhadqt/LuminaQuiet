@@ -1,430 +1,444 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Activity, Clock, ShieldCheck, Wifi } from 'lucide-react';
+import { Activity, Wifi, GaugeCircle, Clock, Calendar, AlertTriangle } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { ENDPOINTS } from '../config/runtime';
+import SessionNoiseEventsModal from '../Components/SessionNoiseEventsModal';
 
 const MAX_LOG_ROWS = 150;
 const REFRESH_INTERVAL_MS = 5000;
 
 const parseSessionId = (value) => {
-  const parsed = Number.parseInt(String(value ?? '').trim(), 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+    const parsed = Number.parseInt(String(value ?? '').trim(), 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
 const formatTimestamp = (timestamp) => {
-  if (!timestamp) {
-    return 'N/A';
-  }
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) {
-    return 'Invalid time';
-  }
-  return parsed.toLocaleTimeString();
+    if (!timestamp) {
+        return 'N/A';
+    }
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+        return 'Invalid time';
+    }
+    return parsed.toLocaleTimeString();
 };
 
 const formatDateTime = (timestamp) => {
-  if (!timestamp) {
-    return 'Not reached';
-  }
-  const parsed = new Date(timestamp);
-  if (Number.isNaN(parsed.getTime())) {
-    return 'Invalid time';
-  }
-  return parsed.toLocaleString();
+    if (!timestamp) {
+        return 'Not reached';
+    }
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+        return 'Invalid time';
+    }
+    return parsed.toLocaleString();
 };
 
 const isMediumThresholdState = (stateValue) => {
-  const value = String(stateValue || '').toLowerCase();
-  return value.includes('medium') && !value.includes('low');
+    const value = String(stateValue || '').toLowerCase();
+    return value.includes('medium') && !value.includes('low');
 };
 
 const isHighThresholdState = (stateValue) => {
-  const value = String(stateValue || '').toLowerCase();
-  return value.includes('high') || value.includes('loud') || value.includes('warning');
+    const value = String(stateValue || '').toLowerCase();
+    return value.includes('high') || value.includes('loud') || value.includes('warning');
 };
 
-const normalizeLog = (item) => {
-  const parsedLevel = Number(item.average_level ?? item.level ?? 0);
-  const level = Number.isFinite(parsedLevel) ? parsedLevel : 0;
+const normalizeLog = (item, index = 0) => {
+    const parsedLevel = Number(item.average_level ?? item.level ?? 0);
+    const level = Number.isFinite(parsedLevel) ? parsedLevel : 0;
 
-  return {
-    id: item.id || `${item.timestamp}-${Math.random()}`,
-    sessionId: parseSessionId(item.session_id),
-    level,
-    fromState: item.from_state || item.previous_status || '--',
-    toState: item.to_state || item.status || item.state || 'Unknown',
-    status: item.status || item.to_state || item.state || 'Unknown',
-    quietDurationMs: Math.max(0, Number(item.quiet_duration_ms ?? 0)),
-    timestamp: item.timestamp || new Date().toISOString(),
-  };
+    return {
+        id: item.id || `${item.timestamp || 'ts'}-${item.session_id || 'session'}-${index}`,
+        sessionId: parseSessionId(item.session_id),
+        level,
+        fromState: item.from_state || item.previous_status || '--',
+        toState: item.to_state || item.status || item.state || 'Unknown',
+        status: item.status || item.to_state || item.state || 'Unknown',
+        quietDurationMs: Math.max(0, Number(item.quiet_duration_ms ?? 0)),
+        timestamp: item.timestamp || new Date().toISOString(),
+    };
 };
 
 const Log = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
 
-  const [logs, setLogs] = useState([]);
-  const [isConnected, setIsConnected] = useState(false);
-  const [sessionInfo, setSessionInfo] = useState(null);
-  const [thresholdHits, setThresholdHits] = useState({
-    mediumReachedAt: null,
-    highReachedAt: null,
-  });
-  const [sessionInput, setSessionInput] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorText, setErrorText] = useState('');
-
-  const socketRef = useRef(null);
-  const reconnectTimerRef = useRef(null);
-  const activeSessionIdRef = useRef(null);
-
-  const requestedSessionId = useMemo(
-    () => parseSessionId(searchParams.get('session_id')),
-    [searchParams]
-  );
-
-  const appendTransitionLog = useCallback((payload) => {
-    const nextLog = normalizeLog(payload);
-
-    setLogs((previousLogs) => {
-      const next = [nextLog, ...previousLogs];
-      return next.slice(0, MAX_LOG_ROWS);
+    const [logs, setLogs] = useState([]);
+    const [sessions, setSessions] = useState([]);
+    const [isConnected, setIsConnected] = useState(false);
+    const [sessionInfo, setSessionInfo] = useState(null);
+    const [thresholdHits, setThresholdHits] = useState({
+        mediumReachedAt: null,
+        highReachedAt: null,
     });
+    const [onlyHighEvents, setOnlyHighEvents] = useState(true);
+    const [isNoiseEventsModalOpen, setIsNoiseEventsModalOpen] = useState(false);
 
-    setThresholdHits((previous) => ({
-      mediumReachedAt:
-        previous.mediumReachedAt || (isMediumThresholdState(nextLog.toState) ? nextLog.timestamp : null),
-      highReachedAt:
-        previous.highReachedAt || (isHighThresholdState(nextLog.toState) ? nextLog.timestamp : null),
-    }));
-  }, []);
+    const socketRef = useRef(null);
+    const reconnectTimerRef = useRef(null);
+    const activeSessionIdRef = useRef(null);
 
-  const fetchSessionDetails = useCallback(async (targetSessionId) => {
-    setIsLoading(true);
-    setErrorText('');
+    const requestedSessionId = useMemo(
+        () => parseSessionId(searchParams.get('session_id')),
+        [searchParams]
+    );
 
-    try {
-      const endpoint = new URL(ENDPOINTS.createLog);
-      endpoint.searchParams.set('limit', String(MAX_LOG_ROWS));
-      if (targetSessionId) {
-        endpoint.searchParams.set('session_id', String(targetSessionId));
-      }
+    const appendTransitionLog = useCallback((payload) => {
+        if (onlyHighEvents && !isHighThresholdState(payload.to_state || payload.status || payload.state)) {
+            return;
+        }
 
-      const response = await fetch(endpoint.toString());
-      if (response.status === 404) {
-        setLogs([]);
-        setSessionInfo(null);
-        setThresholdHits({ mediumReachedAt: null, highReachedAt: null });
-        activeSessionIdRef.current = null;
-        setErrorText(targetSessionId ? `Session #${targetSessionId} was not found.` : 'No active session right now.');
-        return;
-      }
-      if (!response.ok) {
-        throw new Error(`GET logs failed with status ${response.status}`);
-      }
+        const nextLog = normalizeLog(payload);
 
-      const payload = await response.json();
-      const session = payload?.session || null;
-      const thresholdHitsPayload = payload?.threshold_hits || {};
-      const items = Array.isArray(payload.items) ? payload.items : [];
+        setLogs((previousLogs) => {
+            const next = [nextLog, ...previousLogs];
+            return next.slice(0, MAX_LOG_ROWS);
+        });
 
-      setSessionInfo(session);
-      setThresholdHits({
-        mediumReachedAt: thresholdHitsPayload.medium_reached_at || null,
-        highReachedAt: thresholdHitsPayload.high_reached_at || null,
-      });
-      setLogs(items.map((item) => normalizeLog(item)));
+        setThresholdHits((previous) => ({
+            mediumReachedAt:
+                previous.mediumReachedAt || (isMediumThresholdState(nextLog.toState) ? nextLog.timestamp : null),
+            highReachedAt:
+                previous.highReachedAt || (isHighThresholdState(nextLog.toState) ? nextLog.timestamp : null),
+        }));
+    }, [onlyHighEvents]);
 
-      const activeSessionId = parseSessionId(session?.id);
-      activeSessionIdRef.current = activeSessionId;
-      setSessionInput(targetSessionId ? String(targetSessionId) : activeSessionId ? String(activeSessionId) : '');
-    } catch (error) {
-      console.error('Failed to load session log details:', error);
-      setErrorText(error.message || 'Failed to load session logs.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    activeSessionIdRef.current = requestedSessionId || parseSessionId(sessionInfo?.id);
-  }, [requestedSessionId, sessionInfo]);
-
-  useEffect(() => {
-    let shouldReconnect = true;
-
-    const connectSocket = (attempt = 0) => {
-      if (!shouldReconnect) {
-        return;
-      }
-
-      const socket = new WebSocket(ENDPOINTS.noiseSocket);
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        setIsConnected(true);
-      };
-
-      socket.onmessage = (event) => {
+    const fetchSessions = useCallback(async () => {
         try {
-          const payload = JSON.parse(event.data);
-          if (payload.type === 'connection' || payload.type === 'pong') {
-            return;
-          }
+            const response = await fetch(ENDPOINTS.sessionsList);
+            if (!response.ok) {
+                throw new Error(`GET sessions failed with status ${response.status}`);
+            }
 
-          const activeSessionId = activeSessionIdRef.current;
-          const payloadSessionId = parseSessionId(payload.session_id);
-          if (!activeSessionId || payloadSessionId !== activeSessionId) {
-            return;
-          }
-
-          if (payload.type === 'state_change') {
-            appendTransitionLog(payload);
-          }
+            const payload = await response.json();
+            const items = Array.isArray(payload?.items) ? payload.items : [];
+            setSessions(items);
         } catch (error) {
-          console.error('Invalid log websocket payload:', error);
+            console.error('Failed to load sessions:', error);
         }
-      };
+    }, []);
 
-      socket.onerror = () => {
-        socket.close();
-      };
+    const fetchSessionDetails = useCallback(async (targetSessionId) => {
+        try {
+            const endpoint = new URL(ENDPOINTS.createLog);
+            endpoint.searchParams.set('limit', String(MAX_LOG_ROWS));
+            if (onlyHighEvents) {
+                endpoint.searchParams.set('high_only', '1');
+            }
+            if (targetSessionId) {
+                endpoint.searchParams.set('session_id', String(targetSessionId));
+            }
 
-      socket.onclose = () => {
-        setIsConnected(false);
-        if (!shouldReconnect) {
-          return;
+            const response = await fetch(endpoint.toString());
+            if (response.status === 404) {
+                setLogs([]);
+                setSessionInfo(null);
+                setThresholdHits({ mediumReachedAt: null, highReachedAt: null });
+                activeSessionIdRef.current = null;
+                return;
+            }
+            if (!response.ok) {
+                throw new Error(`GET logs failed with status ${response.status}`);
+            }
+
+            const payload = await response.json();
+            const session = payload?.session || null;
+            const thresholdHitsPayload = payload?.threshold_hits || {};
+            const items = Array.isArray(payload.items) ? payload.items : [];
+
+            setSessionInfo(session);
+            setThresholdHits({
+                mediumReachedAt: thresholdHitsPayload.medium_reached_at || null,
+                highReachedAt: thresholdHitsPayload.high_reached_at || null,
+            });
+            setLogs(items.map((item, index) => normalizeLog(item, index)));
+
+            const activeSessionId = parseSessionId(session?.id);
+            activeSessionIdRef.current = activeSessionId;
+        } catch (error) {
+            console.error('Failed to load session log details:', error);
         }
+    }, []);
 
-        const delay = Math.min(10000, 1000 * 2 ** attempt);
-        reconnectTimerRef.current = setTimeout(() => connectSocket(attempt + 1), delay);
-      };
-    };
+    useEffect(() => {
+        activeSessionIdRef.current = requestedSessionId || parseSessionId(sessionInfo?.id);
+    }, [requestedSessionId, sessionInfo]);
 
-    fetchSessionDetails(requestedSessionId);
-    connectSocket();
+    useEffect(() => {
+        let shouldReconnect = true;
 
-    const refreshTimer = setInterval(() => {
-      fetchSessionDetails(requestedSessionId);
-    }, REFRESH_INTERVAL_MS);
+        const connectSocket = (attempt = 0) => {
+            if (!shouldReconnect) {
+                return;
+            }
 
-    return () => {
-      shouldReconnect = false;
-      clearInterval(refreshTimer);
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-      }
-      if (socketRef.current) {
-        socketRef.current.close();
-      }
-    };
-  }, [appendTransitionLog, fetchSessionDetails, requestedSessionId]);
+            const socket = new WebSocket(ENDPOINTS.noiseSocket);
+            socketRef.current = socket;
 
-  const handleLoadSession = useCallback((event) => {
-    event.preventDefault();
-    const nextSessionId = parseSessionId(sessionInput);
-    if (!nextSessionId) {
-      setErrorText('Enter a valid positive Session ID.');
-      return;
-    }
+            socket.onopen = () => {
+                setIsConnected(true);
+            };
 
-    setSearchParams({ session_id: String(nextSessionId) });
-  }, [sessionInput, setSearchParams]);
+            socket.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    if (payload.type === 'connection' || payload.type === 'pong') {
+                        return;
+                    }
 
-  const handleLoadActiveSession = useCallback(() => {
-    setSearchParams({});
-  }, [setSearchParams]);
+                    const activeSessionId = activeSessionIdRef.current;
+                    const payloadSessionId = parseSessionId(payload.session_id);
+                    if (!activeSessionId || payloadSessionId !== activeSessionId) {
+                        return;
+                    }
 
-  const isWarningLog = useCallback(
-    (log) => /high|loud|warning/i.test(log.toState || log.status || '') || log.level > 60,
-    []
-  );
-  const violations = logs.filter((log) => isWarningLog(log)).length;
-  const currentLevel = logs[0]?.level ?? 0;
-  const peakLevel = useMemo(() => {
-    if (logs.length === 0) {
-      return 0;
-    }
-    return Math.max(...logs.map((log) => log.level));
-  }, [logs]);
-  const lastUpdated = logs[0]?.timestamp;
-  const activeSessionLabel = sessionInfo ? `Session #${sessionInfo.id}` : requestedSessionId ? `Session #${requestedSessionId}` : 'Idle';
-  const mediumReachedAt = thresholdHits.mediumReachedAt;
-  const highReachedAt = thresholdHits.highReachedAt;
+                    if (payload.type === 'state_change') {
+                        appendTransitionLog(payload);
+                    }
+                } catch (error) {
+                    console.error('Invalid log websocket payload:', error);
+                }
+            };
 
-  return (
-    <div className="min-h-screen bg-slate-50 p-8 font-sans">
+            socket.onerror = () => {
+                socket.close();
+            };
 
-      <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">LuminaQuiet Session Log</h1>
-          <p className="text-slate-500">Session-only transition history with medium/high threshold reach time.</p>
-        </div>
-        <div className="mt-4 flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-500">
-          <Wifi size={14} className={isConnected ? 'text-green-500' : 'text-red-500'} />
-          {isConnected ? 'WebSocket Live' : 'Offline'} | {activeSessionLabel}
-        </div>
-      </div>
+            socket.onclose = () => {
+                setIsConnected(false);
+                if (!shouldReconnect) {
+                    return;
+                }
 
-      <form onSubmit={handleLoadSession} className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
-          <div className="w-full md:max-w-xs">
-            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">Session ID</label>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={sessionInput}
-              onChange={(event) => setSessionInput(event.target.value)}
-              placeholder="Enter session id"
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <button
-            type="submit"
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-          >
-            Load Session
-          </button>
-          <button
-            type="button"
-            onClick={handleLoadActiveSession}
-            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Use Active Session
-          </button>
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            {isLoading ? 'Refreshing session data...' : 'Session scope locked'}
-          </span>
-        </div>
+                const delay = Math.min(10000, 1000 * 2 ** attempt);
+                reconnectTimerRef.current = setTimeout(() => connectSocket(attempt + 1), delay);
+            };
+        };
 
-        {errorText && (
-          <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-            {errorText}
-          </p>
-        )}
-      </form>
+        fetchSessions();
+        fetchSessionDetails(requestedSessionId);
+        connectSocket();
 
-      <div className="mb-8 grid grid-cols-1 gap-6 md:grid-cols-5">
-        <div className="flex items-center rounded-xl bg-white p-6 shadow-sm border border-slate-100">
-          <div className="mr-4 rounded-full bg-blue-100 p-3 text-blue-600">
-            <Activity size={24} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">Current Level</p>
-            <p className="text-2xl font-bold text-slate-900">{currentLevel} dB</p>
-          </div>
-        </div>
+        const refreshTimer = setInterval(() => {
+            fetchSessions();
+            fetchSessionDetails(requestedSessionId);
+        }, REFRESH_INTERVAL_MS);
 
-        <div className="flex items-center rounded-xl bg-white p-6 shadow-sm border border-slate-100">
-          <div className="mr-4 rounded-full bg-amber-100 p-3 text-amber-600">
-            <Clock size={24} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">Last Updated</p>
-            <p className="text-2xl font-bold text-slate-900">{formatTimestamp(lastUpdated)}</p>
-          </div>
-        </div>
+        return () => {
+            shouldReconnect = false;
+            clearInterval(refreshTimer);
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+            }
+            if (socketRef.current) {
+                socketRef.current.close();
+            }
+        };
+    }, [appendTransitionLog, fetchSessionDetails, fetchSessions, requestedSessionId]);
 
-        <div className="flex items-center rounded-xl bg-white p-6 shadow-sm border border-red-100">
-          <div className="mr-4 rounded-full bg-red-100 p-3 text-red-600">
-            <AlertTriangle size={24} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">Violations (Warning State)</p>
-            <p className="text-2xl font-bold text-red-600">{violations}</p>
-          </div>
-        </div>
+    const handleSelectSession = useCallback((sessionId) => {
+        setSearchParams({ session_id: String(sessionId) });
+    }, [setSearchParams]);
 
-        <div className="flex items-center rounded-xl bg-white p-6 shadow-sm border border-slate-100">
-          <div className="mr-4 rounded-full bg-indigo-100 p-3 text-indigo-600">
-            <Clock size={24} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">Medium Threshold Reached</p>
-            <p className="text-sm font-bold text-slate-900">{formatDateTime(mediumReachedAt)}</p>
-          </div>
-        </div>
+    const currentLevel = logs[0]?.level ?? 0;
 
-        <div className="flex items-center rounded-xl bg-white p-6 shadow-sm border border-slate-100">
-          <div className="mr-4 rounded-full bg-rose-100 p-3 text-rose-600">
-            <AlertTriangle size={24} />
-          </div>
-          <div>
-            <p className="text-sm text-slate-500">High Threshold Reached</p>
-            <p className="text-sm font-bold text-slate-900">{formatDateTime(highReachedAt)}</p>
-          </div>
-        </div>
-      </div>
+    // ⚠️ Watch out: Modified to return the full log object instead of just the number
+    const peakLog = useMemo(() => {
+        if (logs.length === 0) {
+            return null;
+        }
+        return logs.reduce((maxLog, currentLog) =>
+            currentLog.level > maxLog.level ? currentLog : maxLog
+            , logs[0]);
+    }, [logs]);
 
-      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <p className="text-sm text-slate-500">Peak Level</p>
-        <p className="text-2xl font-bold text-slate-900">{peakLevel} dB</p>
-        <p className="mt-2 text-xs text-slate-500">
-          {sessionInfo
-            ? `Session ${sessionInfo.id}: ${formatDateTime(sessionInfo.started_at)} - ${formatDateTime(sessionInfo.ends_at)}`
-            : 'No session context loaded. Provide a Session ID or switch to active session.'}
-        </p>
-      </div>
+    const activeSessionLabel = sessionInfo
+        ? `Session #${sessionInfo.id}`
+        : requestedSessionId
+            ? `Session #${requestedSessionId}`
+            : 'Idle';
 
-  
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 bg-slate-50/50 px-6 py-4">
-          <h3 className="font-semibold text-slate-800">Historical Noise Events</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500">
-              <tr>
-                <th className="px-6 py-4 text-center">Timestamp</th>
-                <th className="px-6 py-4 text-center">Intensity</th>
-                <th className="px-6 py-4 text-center">Transition</th>
-                <th className="px-6 py-4 text-center">Quiet Duration</th>
-                <th className="px-6 py-4 text-center">Automated Response</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {logs.map((log) => (
-                <tr key={log.id} className="hover:bg-slate-50/80 transition">
-                  <td className="whitespace-nowrap px-6 py-4 text-slate-600 text-center">{formatTimestamp(log.timestamp)}</td>
-                  <td className="px-6 py-4 font-medium text-slate-900 text-center">{log.level} dB</td>
-                  <td className="px-6 py-4 text-center text-slate-700 font-semibold">
-                    {log.fromState} {'->'} {log.toState}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      isWarningLog(log)
-                        ? 'bg-red-100 text-red-700' 
-                        : 'bg-green-100 text-green-700'
-                    }`}>
-                      {log.quietDurationMs} ms
+    const selectedSessionId = requestedSessionId || parseSessionId(sessionInfo?.id);
+
+    return (
+        <div className="space-y-8 text-slate-900 bg-slate-50 min-h-screen p-4 md:p-8">
+            {/* Header Section */}
+            <section className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm md:p-8 transition-all duration-300 hover:shadow-md">
+                <div className="pointer-events-none absolute -top-20 -right-10 h-64 w-64 rounded-full bg-cyan-100/50 blur-3xl transition-opacity duration-500" />
+
+                <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-cyan-700">
+                            <Activity size={18} />
+                            <p className="text-xs font-bold uppercase tracking-widest text-cyan-700">Session Analytics</p>
+                        </div>
+                        <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 md:text-4xl">Noise Transition Log</h2>
+                        <p className="max-w-2xl text-sm font-medium text-slate-500 md:text-base">
+                            Inspect per-session transition events and threshold breach timings with real-time updates.
+                        </p>
+                    </div>
+
+                    <div className="inline-flex items-center gap-3 rounded-xl border border-slate-200 bg-white shadow-sm px-5 py-3 text-sm font-bold tracking-wide text-slate-700">
+                        <div className="flex items-center gap-2">
+                            <span className="relative flex h-3 w-3">
+                                {isConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+                                <span className={`relative inline-flex rounded-full h-3 w-3 ${isConnected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                            </span>
+                            {isConnected ? 'WebSocket Live' : 'Offline'}
+                        </div>
+                        <div className="h-4 w-px bg-slate-200"></div>
+                        <div className="text-cyan-700">{activeSessionLabel}</div>
+                    </div>
+                </div>
+            </section>
+
+            {/* Metrics Dashboard */}
+            <section className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {/* Current Level Card */}
+                <div className="group flex flex-col justify-between rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:border-cyan-200 cursor-default">
+                    <div className="flex items-center gap-3 text-cyan-700">
+                        <div className="rounded-lg bg-cyan-50 p-2 group-hover:bg-cyan-100 transition-colors">
+                            <GaugeCircle size={20} />
+                        </div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Current Level</p>
+                    </div>
+                    <div className="mt-6 flex items-end gap-2">
+                        <p className="text-4xl font-extrabold text-slate-900">{currentLevel}</p>
+                        <p className="mb-1 text-lg font-semibold text-slate-500">dB</p>
+                    </div>
+                </div>
+
+                {/* Peak Level Card */}
+                <div className="group flex flex-col justify-between rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:border-indigo-200 cursor-default">
+                    <div className="flex items-center gap-3 text-indigo-700">
+                        <div className="rounded-lg bg-indigo-50 p-2 group-hover:bg-indigo-100 transition-colors">
+                            <Activity size={20} />
+                        </div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Peak Level</p>
+                    </div>
+                    <div className="mt-6 flex flex-col gap-1">
+                        <div className="flex items-end gap-2">
+                            <p className="text-4xl font-extrabold text-slate-900">{peakLog?.level ?? 0}</p>
+                            <p className="mb-1 text-lg font-semibold text-slate-500">dB</p>
+                        </div>
+                        {peakLog ? (
+                            <div className="mt-1 flex flex-col text-xs font-medium text-slate-500">
+                                <span>Session #{peakLog.sessionId || sessionInfo?.id || 'Unknown'}</span>
+                                <span className="text-slate-400">{formatDateTime(peakLog.timestamp)}</span>
+                            </div>
+                        ) : (
+                            <p className="mt-1 text-xs font-medium text-slate-400 italic">No data recorded</p>
+                        )}
+                    </div>
+                </div>
+
+                {/* Session Context Card */}
+                <div className="group flex flex-col justify-between rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:border-teal-200 cursor-default md:col-span-2 lg:col-span-1">
+                    <div className="flex items-center gap-3 text-teal-700">
+                        <div className="rounded-lg bg-teal-50 p-2 group-hover:bg-teal-100 transition-colors">
+                            <Clock size={20} />
+                        </div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Session Context</p>
+                    </div>
+                    <div className="mt-6">
+                        {sessionInfo ? (
+                            <div className="space-y-1">
+                                <p className="text-lg font-bold text-slate-900">Session #{sessionInfo.id}</p>
+                                <p className="text-sm font-medium text-slate-500 line-clamp-1">
+                                    {formatDateTime(sessionInfo.started_at)} — {formatDateTime(sessionInfo.ends_at)}
+                                </p>
+                            </div>
+                        ) : (
+                            <p className="text-sm font-medium text-slate-400 italic">
+                                No session context loaded. Select a session below.
+                            </p>
+                        )}
+                    </div>
+                </div>
+            </section>
+
+            {/* Sessions List Section */}
+            <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+                <div className="mb-6 flex items-center justify-between border-b border-slate-100 pb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="rounded-lg bg-slate-100 p-2 text-slate-600">
+                            <Calendar size={20} />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-900">All Admin Sessions</h3>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                        {sessions.length} Total
                     </span>
-                  </td>
-                  <td className="px-6 py-4 text-slate-500 text-center">
-                    {isWarningLog(log) ? (
-                      <span className="flex items-center justify-center gap-1 text-red-600 font-medium">
-                        <AlertTriangle size={14} /> Threshold Breach Logged
-                      </span>
-                    ) : (
-                      <span className="flex items-center justify-center gap-1 text-slate-400">
-                        <ShieldCheck size={14} /> Quiet/Normal State Logged
-                      </span>
+                </div>
+
+                <div className="grid max-h-[500px] grid-cols-1 gap-4 overflow-y-auto pr-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {sessions.map((session) => {
+                        const sessionId = parseSessionId(session.id);
+                        const isSelected = sessionId === selectedSessionId;
+                        const highHits = Number(session.high_event_count ?? 0);
+
+                        return (
+                            <button
+                                key={session.id}
+                                type="button"
+                                onClick={() => {
+                                    handleSelectSession(session.id);
+                                    setIsNoiseEventsModalOpen(true);
+                                }}
+                                className={`group relative flex flex-col items-start rounded-2xl border p-5 text-left transition-all duration-300 ease-in-out hover:-translate-y-1 hover:shadow-lg ${isSelected
+                                        ? 'border-cyan-500 bg-cyan-50/40 ring-1 ring-cyan-500'
+                                        : 'border-slate-200 bg-white hover:border-cyan-300 hover:bg-slate-50'
+                                    }`}
+                            >
+                                <div className="flex w-full items-start justify-between">
+                                    <p className="text-base font-extrabold text-slate-900">Session #{session.id}</p>
+                                    <span
+                                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${session.is_active
+                                                ? 'bg-emerald-100 text-emerald-700'
+                                                : 'bg-slate-100 text-slate-500'
+                                            }`}
+                                    >
+                                        {session.is_active ? 'Active' : 'Stopped'}
+                                    </span>
+                                </div>
+
+                                <div className="mt-4 w-full space-y-2">
+                                    <div className="flex items-center gap-2 text-sm">
+                                        <AlertTriangle size={14} className={highHits > 0 ? 'text-amber-500' : 'text-slate-400'} />
+                                        <span className="font-medium text-slate-600">
+                                            High hits: <span className={highHits > 0 ? 'font-bold text-amber-600' : 'text-slate-500'}>{highHits}</span>
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-sm">
+                                        <Clock size={14} className="text-slate-400" />
+                                        <span className="font-medium text-slate-500 truncate">
+                                            {formatDateTime(session.started_at)}
+                                        </span>
+                                    </div>
+                                </div>
+                            </button>
+                        );
+                    })}
+
+                    {sessions.length === 0 && (
+                        <div className="col-span-full flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 py-12 text-slate-500">
+                            <Calendar size={32} className="mb-3 text-slate-300" />
+                            <p className="text-sm font-semibold">No sessions found yet.</p>
+                            <p className="mt-1 text-xs text-slate-400">Recorded sessions will appear here.</p>
+                        </div>
                     )}
-                  </td>
-                </tr>
-              ))}
-              {logs.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
-                    No transition logs for this session yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                </div>
+            </section>
+
+            <SessionNoiseEventsModal
+                isOpen={isNoiseEventsModalOpen}
+                onClose={() => setIsNoiseEventsModalOpen(false)}
+                logs={logs}
+                sessionInfo={sessionInfo}
+                onlyHighEvents={onlyHighEvents}
+            />
         </div>
-      </div>
-    </div>
-  );
+    );
 };
 
 export default Log;

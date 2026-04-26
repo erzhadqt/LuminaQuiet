@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError
@@ -79,6 +80,9 @@ class DeviceConfigApiTests(TestCase):
         self.assertEqual(data["config"]["quiet_threshold"], 800)
         self.assertEqual(data["config"]["medium_threshold"], 1500)
         self.assertEqual(data["config"]["loud_threshold"], 2500)
+        self.assertIn("thresholds_db", data["config"])
+        self.assertEqual(data["config"]["calibration"]["a"], 70.0)
+        self.assertEqual(data["config"]["calibration"]["b"], -160.0)
         self.assertEqual(data["config"]["buzzer_on_loud"], False)
 
     def test_post_device_config_updates_and_persists(self):
@@ -87,6 +91,10 @@ class DeviceConfigApiTests(TestCase):
                 "quiet": 900,
                 "medium": 1600,
                 "loud": 2700,
+            },
+            "calibration": {
+                "a": 68.5,
+                "b": -150.2,
             },
             "buzzer_on_loud": True,
         }
@@ -102,12 +110,16 @@ class DeviceConfigApiTests(TestCase):
         self.assertEqual(data["config"]["quiet_threshold"], 900)
         self.assertEqual(data["config"]["medium_threshold"], 1600)
         self.assertEqual(data["config"]["loud_threshold"], 2700)
+        self.assertEqual(data["config"]["calibration"]["a"], 68.5)
+        self.assertEqual(data["config"]["calibration"]["b"], -150.2)
         self.assertEqual(data["config"]["buzzer_on_loud"], True)
 
         config = DeviceConfig.get_solo()
         self.assertEqual(config.quiet_threshold, 900)
         self.assertEqual(config.medium_threshold, 1600)
         self.assertEqual(config.loud_threshold, 2700)
+        self.assertEqual(config.calibration_a, 68.5)
+        self.assertEqual(config.calibration_b, -150.2)
         self.assertEqual(config.buzzer_on_loud, True)
 
     def test_post_device_config_rejects_invalid_order(self):
@@ -127,6 +139,44 @@ class DeviceConfigApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_calibrate_device_config_from_reference_samples(self):
+        target_a = 28.0
+        target_b = -20.0
+        samples = []
+        for adc in [120, 300, 800, 1400, 2300, 3500]:
+            samples.append(
+                {
+                    "adc": adc,
+                    "spl_db": target_a * math.log10(adc) + target_b,
+                }
+            )
+
+        response = self.client.post(
+            reverse("device_config_calibrate"),
+            data=json.dumps({"samples": samples}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "calibrated")
+        self.assertEqual(payload["sample_count"], len(samples))
+        self.assertLess(payload["rmse_db"], 0.001)
+
+        config = DeviceConfig.get_solo()
+        self.assertAlmostEqual(config.calibration_a, target_a, places=3)
+        self.assertAlmostEqual(config.calibration_b, target_b, places=3)
+
+    def test_calibrate_device_config_rejects_invalid_samples(self):
+        response = self.client.post(
+            reverse("device_config_calibrate"),
+            data=json.dumps({"samples": [{"adc": 0, "spl_db": 60}]}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json())
+
 
 class SessionModelTests(TestCase):
     def test_prevents_overlapping_sessions(self):
@@ -136,7 +186,7 @@ class SessionModelTests(TestCase):
             quiet_threshold=800,
             medium_threshold=1200,
             high_threshold=2000,
-            is_active=False,
+            is_active=True,
         )
 
         with self.assertRaises(ValidationError):
@@ -146,11 +196,67 @@ class SessionModelTests(TestCase):
                 quiet_threshold=850,
                 medium_threshold=1300,
                 high_threshold=2100,
-                is_active=False,
+                is_active=True,
             )
+
+    def test_allows_overlap_with_inactive_sessions(self):
+        Session.objects.create(
+            started_at=timezone.now(),
+            duration_seconds=600,
+            quiet_threshold=800,
+            medium_threshold=1200,
+            high_threshold=2000,
+            is_active=False,
+        )
+
+        session = Session.objects.create(
+            started_at=timezone.now() + timedelta(seconds=60),
+            duration_seconds=300,
+            quiet_threshold=850,
+            medium_threshold=1300,
+            high_threshold=2100,
+            is_active=True,
+        )
+
+        self.assertTrue(session.is_active)
 
 
 class SessionApiTests(TestCase):
+    def test_list_sessions_returns_all_sessions(self):
+        older = Session.objects.create(
+            started_at=timezone.now() - timedelta(hours=2),
+            duration_seconds=900,
+            quiet_threshold=800,
+            medium_threshold=1200,
+            high_threshold=2100,
+            is_active=False,
+        )
+        newer = Session.objects.create(
+            started_at=timezone.now() - timedelta(hours=1),
+            duration_seconds=1200,
+            quiet_threshold=850,
+            medium_threshold=1300,
+            high_threshold=2200,
+            is_active=False,
+        )
+
+        NoiseLog.objects.create(
+            session=older,
+            average_level=82,
+            raw_level=3000,
+            previous_status="Medium",
+            status="High",
+        )
+
+        response = self.client.get(reverse("list_sessions"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(payload["items"][0]["id"], newer.id)
+        self.assertEqual(payload["items"][1]["id"], older.id)
+        self.assertEqual(payload["items"][1]["high_event_count"], 1)
+
     def test_start_session_creates_active_session(self):
         payload = {
             "duration_seconds": 900,
@@ -172,6 +278,34 @@ class SessionApiTests(TestCase):
         data = response.json()
         self.assertEqual(data["status"], "started")
         self.assertEqual(data["session"]["thresholds"]["high"], 2600)
+        self.assertIn("thresholds_db", data["session"])
+        self.assertTrue(data["session"]["buzzer_on_loud"])
+
+    def test_start_session_accepts_db_thresholds(self):
+        payload = {
+            "duration_seconds": 900,
+            "thresholds_db": {
+                "quiet": 55,
+                "medium": 68,
+                "high": 80,
+            },
+        }
+
+        response = self.client.post(
+            reverse("start_session"),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertEqual(data["status"], "started")
+        self.assertEqual(data["session"]["thresholds_db"]["quiet"], 55)
+        self.assertEqual(data["session"]["thresholds_db"]["medium"], 68)
+        self.assertEqual(data["session"]["thresholds_db"]["high"], 80)
+
+        session = Session.objects.get(pk=data["session"]["id"])
+        self.assertTrue(session.quiet_threshold < session.medium_threshold < session.high_threshold)
 
     def test_start_session_rejects_when_active_exists(self):
         Session.objects.create(
@@ -212,6 +346,7 @@ class SessionApiTests(TestCase):
         data = response.json()
         self.assertEqual(data["status"], "active")
         self.assertEqual(data["session"]["thresholds"]["medium"], 1400)
+        self.assertTrue(data["session"]["buzzer_on_loud"])
 
     def test_stop_session_marks_active_session_inactive(self):
         session = Session.objects.create(
@@ -230,6 +365,38 @@ class SessionApiTests(TestCase):
         self.assertEqual(payload["session"]["id"], session.id)
         session.refresh_from_db()
         self.assertFalse(session.is_active)
+        self.assertLessEqual(session.ends_at, timezone.now())
+
+    def test_can_start_new_session_after_stop(self):
+        existing_session = Session.objects.create(
+            duration_seconds=3600,
+            quiet_threshold=800,
+            medium_threshold=1200,
+            high_threshold=2100,
+            is_active=True,
+        )
+
+        stop_response = self.client.post(reverse("stop_session"))
+        self.assertEqual(stop_response.status_code, 200)
+
+        start_payload = {
+            "duration_seconds": 900,
+            "thresholds": {
+                "quiet": 850,
+                "medium": 1300,
+                "high": 2200,
+            },
+        }
+        start_response = self.client.post(
+            reverse("start_session"),
+            data=json.dumps(start_payload),
+            content_type="application/json",
+        )
+
+        self.assertEqual(start_response.status_code, 201)
+        existing_session.refresh_from_db()
+        self.assertFalse(existing_session.is_active)
+        self.assertEqual(Session.objects.filter(is_active=True).count(), 1)
 
     def test_stop_session_returns_idle_when_no_active_session(self):
         response = self.client.post(reverse("stop_session"))
@@ -385,3 +552,44 @@ class SessionApiTests(TestCase):
         self.assertTrue(all(item["session_id"] == session.id for item in data["items"]))
         self.assertIsNotNone(data["threshold_hits"]["medium_reached_at"])
         self.assertIsNotNone(data["threshold_hits"]["high_reached_at"])
+
+    def test_get_logs_high_only_returns_high_events(self):
+        session = Session.objects.create(
+            duration_seconds=600,
+            quiet_threshold=800,
+            medium_threshold=1200,
+            high_threshold=2100,
+            is_active=True,
+        )
+
+        NoiseLog.objects.create(
+            session=session,
+            average_level=58,
+            raw_level=1500,
+            previous_status="Quiet",
+            status="Medium",
+        )
+        NoiseLog.objects.create(
+            session=session,
+            average_level=83,
+            raw_level=3100,
+            previous_status="Medium",
+            status="High",
+        )
+        NoiseLog.objects.create(
+            session=session,
+            average_level=86,
+            raw_level=3200,
+            previous_status="High",
+            status="Loud/Warning",
+        )
+
+        response = self.client.get(reverse("create_log") + f"?session_id={session.id}&high_only=1")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["high_only"])
+        self.assertEqual(payload["count"], 2)
+        self.assertTrue(all("high" in item["status"].lower() or "loud" in item["status"].lower() for item in payload["items"]))
+        self.assertIsNone(payload["threshold_hits"]["medium_reached_at"])
+        self.assertIsNotNone(payload["threshold_hits"]["high_reached_at"])

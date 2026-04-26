@@ -47,6 +47,7 @@ const unsigned long LOG_INTERVAL_MS = 500;
 const unsigned long IDLE_SESSION_POLL_MS = 3000;
 const unsigned long ACTIVE_SESSION_POLL_MS = 2000;
 const unsigned long LIVE_SAMPLE_INTERVAL_MS = 1000;
+const unsigned long BUZZER_ALARM_DURATION_MS = 3000;
 const unsigned long WIFI_CONNECT_TIMEOUT_MS = 20000;
 const unsigned long WIFI_RETRY_INTERVAL_MS = 10000;
 const unsigned long HTTP_TIMEOUT_MS = 4000;
@@ -66,6 +67,8 @@ int quietThreshold = QUIET_THRESHOLD_MIN;
 int mediumThreshold = MEDIUM_THRESHOLD_MIN;
 int loudThreshold = LOUD_THRESHOLD_MIN;
 bool buzzerOnLoud = false;
+bool buzzerAlarmActive = false;
+unsigned long buzzerAlarmStartedMs = 0;
 
 unsigned long lastLogMs = 0;
 unsigned long loudEnteredMs = 0;
@@ -104,7 +107,32 @@ WebSocketsClient wsClient;
 bool wsConnected = false;
 
 void enterIdleMode(const char* reason);
+void enterActiveMode();
+bool applySessionPayload(JsonVariantConst sessionNode);
 void pollSessionState(unsigned long nowMs);
+
+void triggerBuzzerAlarm(unsigned long nowMs) {
+  if (!buzzerOnLoud) {
+    return;
+  }
+
+  buzzerAlarmActive = true;
+  buzzerAlarmStartedMs = nowMs;
+}
+
+void updateBuzzerAlarm(unsigned long nowMs) {
+  if (!buzzerAlarmActive) {
+    return;
+  }
+
+  if (nowMs - buzzerAlarmStartedMs >= BUZZER_ALARM_DURATION_MS) {
+    buzzerAlarmActive = false;
+  }
+}
+
+bool isBuzzerOn(unsigned long nowMs) {
+  return buzzerOnLoud && buzzerAlarmActive && nowMs - buzzerAlarmStartedMs < BUZZER_ALARM_DURATION_MS;
+}
 
 void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   if (type == WStype_CONNECTED) {
@@ -131,6 +159,23 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 
   const char* messageType = doc["type"] | "";
+  if (strcmp(messageType, "session_started") == 0) {
+    JsonVariantConst sessionNode = doc["session"];
+    if (sessionNode.isNull()) {
+      sessionNode = doc;
+    }
+
+    int previousSessionId = activeSessionId;
+    if (!applySessionPayload(sessionNode)) {
+      return;
+    }
+
+    if (controllerMode == MODE_IDLE || previousSessionId != activeSessionId) {
+      enterActiveMode();
+    }
+    return;
+  }
+
   if (strcmp(messageType, "session_stopped") != 0) {
     return;
   }
@@ -278,14 +323,16 @@ void setOutputs(bool blueOn, bool greenOn, bool redOn, bool buzzerOn) {
 }
 
 void applyStateOutputs(SoundState state) {
+  bool buzzerOn = isBuzzerOn(millis());
+
   if (state == STATE_QUIET) {
-    setOutputs(false, false, false, false);
+    setOutputs(false, false, false, buzzerOn);
   } else if (state == STATE_MEDIUM_LOW) {
-    setOutputs(true, false, false, false);
+    setOutputs(true, false, false, buzzerOn);
   } else if (state == STATE_MEDIUM) {
-    setOutputs(true, true, false, false);
+    setOutputs(true, true, false, buzzerOn);
   } else {
-    setOutputs(false, false, true, buzzerOnLoud);
+    setOutputs(false, false, true, buzzerOn);
   }
 }
 
@@ -343,6 +390,8 @@ void enterIdleMode(const char* reason) {
   lastReportedState = STATE_QUIET;
   hasReportedState = false;
   activeSessionId = -1;
+  buzzerAlarmActive = false;
+  buzzerAlarmStartedMs = 0;
   setOutputs(false, false, false, false);
 
   if (reason != nullptr && strlen(reason) > 0) {
@@ -359,6 +408,8 @@ void enterActiveMode() {
   loudEnteredMs = 0;
   quietEnteredMs = millis();
   lastLiveSampleMs = 0;
+  buzzerAlarmActive = false;
+  buzzerAlarmStartedMs = 0;
   resetSmoothingWindow();
 
   Serial.print("Mode switched to ACTIVE | session #");
@@ -415,7 +466,12 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
   mediumThreshold = nextMedium;
   loudThreshold = nextLoud;
   activeSessionId = sessionId;
-  buzzerOnLoud = sessionNode["buzzer_on_loud"] | false;
+  buzzerOnLoud = sessionNode["buzzer_on_loud"] | true;
+
+  if (!buzzerOnLoud) {
+    buzzerAlarmActive = false;
+    buzzerAlarmStartedMs = 0;
+  }
 
   return true;
 }
@@ -537,17 +593,23 @@ void monitorNoiseWhenActive(unsigned long nowMs) {
     currentState = computeTargetState(average);
     if (currentState == STATE_LOUD) {
       loudEnteredMs = nowMs;
+      triggerBuzzerAlarm(nowMs);
     }
     if (currentState == STATE_QUIET) {
       quietEnteredMs = nowMs;
     }
     lastReportedState = currentState;
     hasReportedState = true;
+    updateBuzzerAlarm(nowMs);
     applyStateOutputs(currentState);
     return;
   }
 
   updateStateWithHysteresis(average, nowMs);
+  if (currentState == STATE_LOUD && lastReportedState != STATE_LOUD) {
+    triggerBuzzerAlarm(nowMs);
+  }
+  updateBuzzerAlarm(nowMs);
   applyStateOutputs(currentState);
 
   if (currentState == lastReportedState) {

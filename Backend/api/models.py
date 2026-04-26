@@ -12,6 +12,9 @@ class DeviceConfig(models.Model):
     quiet_threshold = models.IntegerField(default=800)
     medium_threshold = models.IntegerField(default=1500)
     loud_threshold = models.IntegerField(default=2500)
+    # Empirical mapping coefficients: dB = a * log10(adc) + b
+    calibration_a = models.FloatField(default=70.0)
+    calibration_b = models.FloatField(default=-160.0)
     buzzer_on_loud = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -66,6 +69,7 @@ class Session(models.Model):
         if self.started_at and self.duration_seconds > 0:
             computed_end = self.started_at + timedelta(seconds=self.duration_seconds)
             overlaps = Session.objects.exclude(pk=self.pk).filter(
+                is_active=True,
                 started_at__lt=computed_end,
                 ends_at__gt=self.started_at,
             )

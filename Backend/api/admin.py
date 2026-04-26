@@ -29,6 +29,8 @@ class DeviceConfigAdmin(admin.ModelAdmin):
         "quiet_threshold",
         "medium_threshold",
         "loud_threshold",
+        "calibration_a",
+        "calibration_b",
         "buzzer_on_loud",
         "updated_at",
     )

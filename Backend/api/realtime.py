@@ -1,4 +1,5 @@
 import json
+import math
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -6,6 +7,10 @@ from channels.layers import get_channel_layer
 from .models import DeviceConfig, NoiseLog
 
 GROUP_NAME = "noise_updates"
+MIN_ADC_FOR_LOG = 1
+MAX_ADC_VALUE = 4095
+MIN_DB_VALUE = 30
+MAX_DB_VALUE = 120
 
 
 def coerce_int(value, default=0):
@@ -49,6 +54,37 @@ def _validate_thresholds(quiet_threshold, medium_threshold, loud_threshold):
         raise ValueError("threshold ordering must satisfy quiet < medium < loud")
 
 
+def _validate_calibration(calibration_a, calibration_b):
+    if not math.isfinite(calibration_a) or not math.isfinite(calibration_b):
+        raise ValueError("calibration coefficients must be finite numbers")
+    if calibration_a <= 0:
+        raise ValueError("calibration_a must be greater than 0")
+
+
+def adc_to_db(adc_value, calibration_a, calibration_b):
+    clamped_adc = max(MIN_ADC_FOR_LOG, min(MAX_ADC_VALUE, coerce_int(adc_value, MIN_ADC_FOR_LOG)))
+    db_value = calibration_a * math.log10(clamped_adc) + calibration_b
+    return int(round(max(MIN_DB_VALUE, min(MAX_DB_VALUE, db_value))))
+
+
+def db_to_adc(db_value, calibration_a, calibration_b):
+    if calibration_a <= 0:
+        raise ValueError("calibration_a must be greater than 0")
+
+    numeric_db = float(db_value)
+    exponent = (numeric_db - calibration_b) / calibration_a
+    adc_value = int(round(10 ** exponent))
+    return max(0, min(MAX_ADC_VALUE, adc_value))
+
+
+def map_thresholds_to_db(quiet_threshold, medium_threshold, loud_threshold, calibration_a, calibration_b):
+    return {
+        "quiet": adc_to_db(quiet_threshold, calibration_a, calibration_b),
+        "medium": adc_to_db(medium_threshold, calibration_a, calibration_b),
+        "high": adc_to_db(loud_threshold, calibration_a, calibration_b),
+    }
+
+
 def _parse_sensor_values(values):
     if not isinstance(values, list):
         return []
@@ -56,10 +92,25 @@ def _parse_sensor_values(values):
 
 
 def serialize_config(config):
+    thresholds_db = map_thresholds_to_db(
+        config.quiet_threshold,
+        config.medium_threshold,
+        config.loud_threshold,
+        config.calibration_a,
+        config.calibration_b,
+    )
+
     return {
         "quiet_threshold": config.quiet_threshold,
         "medium_threshold": config.medium_threshold,
         "loud_threshold": config.loud_threshold,
+        "quiet_threshold_db": thresholds_db["quiet"],
+        "medium_threshold_db": thresholds_db["medium"],
+        "high_threshold_db": thresholds_db["high"],
+        "calibration": {
+            "a": config.calibration_a,
+            "b": config.calibration_b,
+        },
         "buzzer_on_loud": config.buzzer_on_loud,
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "thresholds": {
@@ -67,6 +118,7 @@ def serialize_config(config):
             "medium": config.medium_threshold,
             "loud": config.loud_threshold,
         },
+        "thresholds_db": thresholds_db,
     }
 
 
@@ -93,21 +145,30 @@ def update_device_config(raw_payload):
         config.loud_threshold,
     )
 
+    calibration_node = payload.get("calibration", {})
+    calibration_a = float(calibration_node.get("a", payload.get("calibration_a", config.calibration_a)))
+    calibration_b = float(calibration_node.get("b", payload.get("calibration_b", config.calibration_b)))
+
     buzzer_on_loud = coerce_bool(
         payload.get("buzzer_on_loud", payload.get("buzzerEnabled", config.buzzer_on_loud)),
         config.buzzer_on_loud,
     )
 
     _validate_thresholds(quiet_threshold, medium_threshold, loud_threshold)
+    _validate_calibration(calibration_a, calibration_b)
 
     config.quiet_threshold = quiet_threshold
     config.medium_threshold = medium_threshold
     config.loud_threshold = loud_threshold
+    config.calibration_a = calibration_a
+    config.calibration_b = calibration_b
     config.buzzer_on_loud = buzzer_on_loud
     config.save(update_fields=[
         "quiet_threshold",
         "medium_threshold",
         "loud_threshold",
+        "calibration_a",
+        "calibration_b",
         "buzzer_on_loud",
         "updated_at",
     ])
