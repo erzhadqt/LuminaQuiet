@@ -436,14 +436,14 @@ const StartSession = () => {
     const displayWifiRssi = isSystemTurnedOff || wifiRssi === null ? 'N/A' : `${wifiRssi} dBm`;
 
     const isWarning = useMemo(
-        () => {
-            if (isSystemTurnedOff) return false;
-            const isHardwareLoud = displayStatusText === 'High' || displayStatusText === 'STATE_LOUD';
-            // FIXED: Now accurately checks the DB level against the DB Threshold
-            return displayDbLevel >= activeThresholdsDb.high || isHardwareLoud;
-        },
-        [activeThresholdsDb.high, displayDbLevel, isSystemTurnedOff, displayStatusText]
-    );
+    () => {
+        if (isSystemTurnedOff) return false;
+        // Rely STRICTLY on the hardware's evaluated state.
+        // Bypassing local DB calculations prevents UI/Hardware desync.
+        return displayStatusText === 'High' || displayStatusText === 'STATE_LOUD';
+    },
+    [isSystemTurnedOff, displayStatusText]
+);
 
     const gaugeHeight = clampDbPercent(displayDbLevel);
     const highThresholdMarkerPosition = clampDbPercent(activeThresholdsDb.high);
@@ -669,10 +669,9 @@ const StartSession = () => {
                             <p className="mt-1 text-sm font-bold text-slate-800">{displaySensorValues.length || 0} channels in latest packet</p>
                         </div>
 
-                        <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                        {/* <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                             <div className="mb-2 flex items-center gap-2">
                                 <Volume2 size={15} className="text-slate-500" />
-                                {/* Changed title to note this is Raw Signal for debugging purposes */}
                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Hardware Signal (Raw)</p>
                             </div>
                             <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto pr-1">
@@ -690,7 +689,7 @@ const StartSession = () => {
                                     <span className="text-xs font-medium text-slate-500">No sensor array in latest packet.</span>
                                 )}
                             </div>
-                        </div>
+                        </div> */}
 
                         <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                             <div className="flex items-center gap-2">

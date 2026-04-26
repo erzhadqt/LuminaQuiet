@@ -324,9 +324,14 @@ void updateStateWithHysteresis(int level, unsigned long nowMs) {
 
 // Maps Frontend DB inputs (e.g. 55, 68, 80) precisely into Hardware ADC Values.
 // Live sensor readings stay raw ADC values.
+// Maps Frontend DB inputs precisely into Hardware ADC Values using inverse log.
 int dbToRaw(int db) {
-  if (baselineLevel >= 4095) return 4095;
-  long raw = map(db, 30, 120, baselineLevel, 4095);
+  // Inverse of: db = DB_A * log10(amplitude) + DB_B
+  // amplitude = 10 ^ ((db - DB_B) / DB_A)
+  
+  float amplitude = pow(10.0, (db - DB_B) / DB_A);
+  long raw = baselineLevel + (long)amplitude;
+  
   return constrain((int)raw, 0, 4095);
 }
 
