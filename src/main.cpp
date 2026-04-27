@@ -23,8 +23,8 @@ const int NUM_SENSORS = sizeof(SOUND_SENSOR_PINS) / sizeof(SOUND_SENSOR_PINS[0])
 const int BUZZER_PIN = 23;
 
 // Global Calibration Constants for dB Computation
-const float DB_A = 12.60; // Multiplier (Logarithmic slope)
-const float DB_B = 45.0; // Offset (Baseline noise floor in dB)
+const float DB_A = 9.43; // Multiplier (Logarithmic slope)
+const float DB_B = 60.0; // Offset (Baseline noise floor in dB)
 
 // Local defaults used at boot until admin config arrives
 const int QUIET_THRESHOLD_MIN = 800;
@@ -418,10 +418,10 @@ bool applySessionPayload(JsonVariantConst sessionNode) {
     hasDbLoud = true;
   }
 
-  // Keep backward compatibility: convert dB only if matching raw threshold is absent.
-  if (!hasRawQuiet && hasDbQuiet) nextQuiet = dbToRaw(dbQuiet);
-  if (!hasRawMedium && hasDbMedium) nextMedium = dbToRaw(dbMedium);
-  if (!hasRawLoud && hasDbLoud) nextLoud = dbToRaw(dbLoud);
+  // Prioritize dB values to ensure identical ESP32 vs Frontend sync calculations
+  if (hasDbQuiet) nextQuiet = dbToRaw(dbQuiet);
+  if (hasDbMedium) nextMedium = dbToRaw(dbMedium);
+  if (hasDbLoud) nextLoud = dbToRaw(dbLoud);
 
   if (!validateThresholdOrder(nextQuiet, nextMedium, nextLoud) || sessionId < 0) {
     Serial.println("Ignored session payload: invalid order or ID.");

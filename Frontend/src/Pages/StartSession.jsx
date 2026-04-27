@@ -72,23 +72,23 @@ const StartSession = () => {
     const [reconnectAttempt, setReconnectAttempt] = useState(0);
 
     const [statusText, setStatusText] = useState('No Data');
-    const [dbLevel, setDbLevel] = useState(0); 
+    const [dbLevel, setDbLevel] = useState(0);
     const [previousDbLevel, setPreviousDbLevel] = useState(0); // Track previous DB instead of ADC
-    
+
     const [deviceId, setDeviceId] = useState('N/A');
     const [sensorValues, setSensorValues] = useState([]); // Kept for debugging physical sensor wiring
     const [wifiRssi, setWifiRssi] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
-    
+
     const [activeThresholdsDb, setActiveThresholdsDb] = useState(DEFAULT_THRESHOLDS_DB);
     const [sessionInfo, setSessionInfo] = useState(null);
     const [lastCompletedSession, setLastCompletedSession] = useState(null);
-    
+
     const [isStartSessionModalOpen, setIsStartSessionModalOpen] = useState(false);
     const [isSessionCompletedModalOpen, setIsSessionCompletedModalOpen] = useState(false);
     const [isStartingSession, setIsStartingSession] = useState(false);
     const [isStoppingSession, setIsStoppingSession] = useState(false);
-    
+
     const [sessionActionError, setSessionActionError] = useState('');
     const [sessionActionNotice, setSessionActionNotice] = useState('');
     const [nowMs, setNowMs] = useState(Date.now());
@@ -154,7 +154,7 @@ const StartSession = () => {
         // DB Level Logic replacement
         const parsedDb = Number(payload.db_level ?? 0);
         const nextDb = Number.isFinite(parsedDb) ? parsedDb : 0;
-        
+
         setPreviousDbLevel(dbRef.current);
         dbRef.current = nextDb;
         setDbLevel(nextDb);
@@ -348,7 +348,7 @@ const StartSession = () => {
                 try {
                     const payload = JSON.parse(event.data);
                     if (payload.type === 'connection' || payload.type === 'pong') return;
-                    
+
                     if (payload.type === 'config_update') {
                         if (!sessionActiveRef.current) applyThresholds(payload?.config || payload);
                         return;
@@ -429,26 +429,25 @@ const StartSession = () => {
 
     const displayDbLevel = isSystemTurnedOff ? 0 : dbLevel;
     const displayPreviousDbLevel = isSystemTurnedOff ? 0 : previousDbLevel;
-    
+
     const displayDeviceId = isSystemTurnedOff ? 'N/A' : deviceId;
     const displayStatusText = isSystemTurnedOff ? 'OFF' : statusText;
     const displaySensorValues = isSystemTurnedOff ? [] : sensorValues;
     const displayWifiRssi = isSystemTurnedOff || wifiRssi === null ? 'N/A' : `${wifiRssi} dBm`;
 
     const isWarning = useMemo(
-    () => {
-        if (isSystemTurnedOff) return false;
-        // Rely STRICTLY on the hardware's evaluated state.
-        // Bypassing local DB calculations prevents UI/Hardware desync.
-        return displayStatusText === 'High' || displayStatusText === 'STATE_LOUD';
-    },
-    [isSystemTurnedOff, displayStatusText]
-);
+        () => {
+            if (isSystemTurnedOff) return false;
+            // Bypassing status text string ensures instant visual gauge sync when the height reaches the threshold marker.
+            return displayDbLevel >= activeThresholdsDb.high;
+        },
+        [isSystemTurnedOff, displayDbLevel, activeThresholdsDb.high]
+    );
 
     const gaugeHeight = clampDbPercent(displayDbLevel);
     const highThresholdMarkerPosition = clampDbPercent(activeThresholdsDb.high);
     const highThresholdLabelPosition = Math.min(Math.max(highThresholdMarkerPosition, 6), 94);
-    
+
     // Trend now compares decibels instead of raw ADC averages
     const isTrendingUp = displayDbLevel > displayPreviousDbLevel;
 
